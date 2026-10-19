@@ -1,0 +1,80 @@
+{
+  "name": "dsh-auto-worktree",
+  "version": "0.1.0",
+  "description": "Codex-style default Git worktree for DeepSeek Harness sessions: every new session automatically gets its own detached checkout and works there — no naming, no buttons.",
+  "license": "MIT",
+  "author": "wplct",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "git",
+    "worktree",
+    "agent"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wplct/dsh-auto-worktree.git"
+  },
+  "homepage": "https://github.com/wplct/dsh-auto-worktree#readme",
+  "bugs": {
+    "url": "https://github.com/wplct/dsh-auto-worktree/issues"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke-host.mjs && node scripts/smoke-client.mjs",
+    "verify": "npm test && npm run smoke && node --check client/client.js",
+    "install:dry": "node install.mjs --dry-run",
+    "uninstall:dry": "node uninstall.mjs --dry-run"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-commands": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-settings": ">=0.2.0-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible"
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+# dsh-auto-worktree bundle patch: inserts the plugin row into the profile roster.
+# Applied as a profile bundle layer (the `dsh.bundle.patch` manifest field) over
+# dsh-base; activate with a profile dependency on this package:
+#   "dsh-auto-worktree": "file:plugins/dsh-auto-worktree"
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs in
+# the host process (agent/created hook, tools, commands, /api routes), and the
+# `dsh.client` declaration in package.json makes the browser half
+# (exports "./client") load in the web GUI.
+- insert:
+    - id: auto-worktree
+      name: dsh-auto-worktree
+      config:
+        enabled: true
+        root: ''
+        directory: .agents/worktrees
+        fetchBeforeCreate: false
+        autoPrune: true
+        autoPruneKeep: 15
+        pruneGraceMs: 60000
+        mode: detached
+        namePrefix: 'wt-'
+        branchPrefix: 'wt/'
+        baseRef: HEAD
+        poolGitignore: true
+        gitTimeoutMs: 20000
+        skipChildAgents: true
+        skipSessionIdPatterns:
+          - '^session-taskboard-'
+        skipPresets: []
+        disableMarker: .dsh-auto-worktree-off
+        maxPerRepo: 32
+        cleanupOnDispose: false
+        noticeOnCreate: false
