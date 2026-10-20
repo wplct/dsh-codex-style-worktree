@@ -4,11 +4,18 @@
 
 > A "work like Codex" placement choice for DSH sessions: on the new-session hero row, pick **Local** or **New local worktree** (the default) next to the workspace chip; after you send the first message the plugin creates a detached checkout and switches **that session's** cwd into it. No new Workspace, no naming, no branch from the plugin (Git owns branch naming at commit time).
 
-- Version: `0.5.0` (2026-10-20; package / plugin id / loader row name: `dsh-codex-style-worktree`; profile-patch insert row id: `codex-worktree`)
+- Version: `0.5.1` (2026-10-20; package / plugin id / loader row name: `dsh-codex-style-worktree`; profile-patch insert row id: `codex-worktree`)
 - API namespace: `/api/dsh-codex-style-worktree`, RPC method prefix `dsh-codex-style-worktree/`; sidecar: `$DSH_HOME/dsh-codex-style-worktree/state.json`; disable marker: `.dsh-codex-style-worktree-off`
 - GitHub: <https://github.com/wplct/dsh-codex-style-worktree>
 - Requirements: DSH `0.2.0-rc.2` / `0.2.1-rc.2`, Node.js `>= 22.19.0`, `git` on PATH
 - License: MIT
+
+## 0.5.1: the checkout is created on the first message
+
+- **Bug fixed**: opening a blank Session no longer creates a checkout. The desktop fires `agent/created` the moment the New Session appears — long before the first prompt — so the old wiring decided the work location at Session-open time; a choice made in that blank Session therefore applied only to the *next* Session (switching to Local still created a checkout, switching back to New local worktree created none).
+- Creation now runs on the first step of the Session's first turn (`agent/pre-step` with `turn === 1`) — i.e. after you send the first message — and the per-workspace placement is read at that moment, so the choice made in the blank Session applies to **that** Session.
+- Blank Sessions no longer leave stray checkouts behind; the progress card and sidebar marker appear after the first message instead of when the blank Session opens.
+- Nothing else changes; there is no config, sidecar or settings migration. Upgrade with `dsh plugin --profile desktop update dsh-codex-style-worktree` and reopen DSH once.
 
 ## 0.5.0: rename-only release
 
@@ -33,7 +40,7 @@
 
 | Capability | 0.2.x | 0.3.0 |
 | --- | --- | --- |
-| When the worktree is created | Automatically for every new session (no choice); a "New Worktree" button could also create one on demand | You choose a placement on the hero row; the worktree is created **after the first message** (`agent/created`) |
+| When the worktree is created | Automatically for every new session (no choice); a "New Worktree" button could also create one on demand | You choose a placement on the hero row; the worktree is created **after the first message** (first-turn `agent/pre-step`) |
 | Selector location | A dock button above the composer | The hero workspace row: a pill between `📁 workspace ▼` and `standard mode ▼` |
 | Remembered choice | None | **Per workspace**, persisted in the sidecar (`placements`), restart-safe |
 | Workspace | The old button called `workspaces.create`, cluttering the sidebar | **Never creates a Workspace**; only the session cwd changes |
@@ -47,7 +54,7 @@
 
 1. On the new-session hero row (the blank state without a session id) the workspace row shows a placement pill: **New local worktree** (default) or **Local**;
 2. the choice is written back to the host immediately and persisted **per workspace path** in the sidecar; later sessions in that workspace inherit it, across restarts;
-3. you send the first message → DSH creates the Session and fires `agent/created` (before the model starts) → the host decides by that workspace's placement whether to create a checkout;
+3. you send the first message → the Session's first turn starts with `agent/pre-step` (before the model's first step) → the host decides by that workspace's placement whether to create a checkout;
 4. with "New local worktree": a **detached HEAD** checkout is created at `<repo>/.agents/worktrees/wt-<timestamp>` and **this session's** working directory is switched to it; the session stays attached to its original Workspace;
 5. creation progress is pushed through the `codexWorktree` session projection and rendered as an inline progress card above the composer (`Prepare workspace → Check out files → Set up environment`); when done the card fades and the header chip plus the sidebar marker appear;
 6. with "Local": nothing is created; the session runs in its original Workspace directory;
@@ -78,8 +85,8 @@ Position: the official **`conversation.hero.options`** seat — the compact opti
 ### 2.2 Creation after the first message
 
 1. You send the first message;
-2. DSH creates the Session and fires `agent/created` (serial event, before the model starts);
-3. the host decides by that workspace's placement: `local` → do nothing; `worktree` → run `Prepare workspace` (create the pool directory + self-ignoring `.gitignore`) → `Check out files` (`git worktree add --detach`) → `Set up environment` (canonicalize the path, `workingDirectory.set`, write the sidecar record);
+2. the Session's first turn begins and the host's `agent/pre-step` listener runs before the model's first step (a blank Session on its own creates nothing);
+3. the host re-reads that workspace's placement: `local` → do nothing; `worktree` → run `Prepare workspace` (create the pool directory + self-ignoring `.gitignore`) → `Check out files` (`git worktree add --detach`) → `Set up environment` (canonicalize the path, `workingDirectory.set`, write the sidecar record);
 4. every phase is pushed through the session projection, and the client renders an inline progress card above the composer:
 
 ```text
@@ -119,7 +126,7 @@ Position: the official **`conversation.hero.options`** seat — the compact opti
 - Data source: the host registers the `codexWorktree` session projection; the client reads `sessions.list.getSnapshot().byId[sessionId].projectionValues?.codexWorktree` and renders the icon only when `phase === 'ready'`, hiding it for `null`/missing. **Zero RPC, zero polling.**
 - Creation, cleanup and pruning changes appear immediately via projection pushes.
 
-> Known limitation: when you clean a **non-live session's** checkout from the settings page, the host cannot append a projection event for that session, so its sidebar marker disappears only on that session's next `agent/created` consistency repair.
+> Known limitation: when you clean a **non-live session's** checkout from the settings page, the host cannot append a projection event for that session, so its sidebar marker disappears only on that session's next consistency repair (reopening the session or its first step).
 
 ### 2.5 Session header chip
 
@@ -155,10 +162,15 @@ Then **quit and reopen DSH once** (the bundle layer takes effect; this is not a 
 
 ### 3.2 Upgrading from older versions
 
-**0.4.x → 0.5.0 (current, rename-only)**:
+**0.5.0 → 0.5.1 (current)**:
+
+- bug fix only: the checkout is created on the first message instead of when a blank Session opens, so the placement choice applies to the Session it was made in;
+- no migration: run `dsh plugin --profile desktop update dsh-codex-style-worktree`, then quit and reopen DSH once.
+
+**0.4.x → 0.5.0 (rename-only)**:
 
 - rename only, no feature changes (the 0.4.0 cleanup guard, restorable snapshots and `cleanupOnArchive` all stay);
-- follow the "0.5.0: rename-only release" section above: remove + add + restart; settings values, sidecar records and snapshot refs are preserved (the ref prefix follows the new name as `refs/dsh-codex-style-worktree/`; refs written by the old version can still be pointed at with `git update-ref`).
+- follow the "0.5.0: rename-only release" section: remove + add + restart; settings values, sidecar records and snapshot refs are preserved (the ref prefix follows the new name as `refs/dsh-codex-style-worktree/`; refs written by the old version can still be pointed at with `git update-ref`).
 
 **0.3.x → 0.4.0 (history)**:
 
@@ -340,7 +352,7 @@ The browser calls through the authenticated `/api` carrier: `connection.rpc.call
 | `settings` | `{action:'get'}` / `{action:'set', patch, revision}` / `{action:'reset'}` | `{ ns, revision, writable, values, defaults, fields: [...] }` | `settings-unavailable`, `conflict`, `invalid-config` |
 | `restore` | `{ ref }` (snapshot ref, required) | the new checkout: `{ ref, path, commit, repoRoot }` (not bound to the original session, no cwd switch, not written to records) | `bad-request`, `snapshot-not-found` (other failures are `operation-failed`) |
 
-- **There is no `create` and no `cancel`**: creation is triggered only by `agent/created`; the progress card's "Cancel" merely hides the card on the client.
+- **There is no `create` and no `cancel`**: creation is triggered only by the first message of a Session (first-turn `agent/pre-step`); the progress card's "Cancel" merely hides the card on the client.
 - Projection data never goes through RPC; `status` is only used on demand by the chip popover and the settings page.
 
 ### 7.2 Session projection (zero polling)
@@ -350,7 +362,7 @@ The browser calls through the authenticated `/api` carrier: `connection.rpc.call
 - the client subscribes to `sessions.list` snapshot entries at `byId[sessionId].projectionValues.codexWorktree` (`useSyncExternalStore`) for the progress card, sidebar marker and chip base state;
 - **no `setInterval` / no polling anywhere**;
 - projection events go into the session log (~4 small events per new session) — that is DSH's native state-sync mechanism and the price of zero polling;
-- cleanup: live session → the host appends `null`, the marker disappears immediately; non-live session → `null` is appended on the next `agent/created` consistency repair (see the known limitation in 2.4).
+- cleanup: live session → the host appends `null`, the marker disappears immediately; non-live session → `null` is appended on the next consistency repair (see the known limitation in 2.4).
 
 ### 7.3 Sidecar data (`$DSH_HOME/dsh-codex-style-worktree/state.json`) v3
 
@@ -396,14 +408,14 @@ The browser calls through the authenticated `/api` carrier: `connection.rpc.call
 
 - **DSH versions**: `0.2.0-rc.2` / `0.2.1-rc.2`; depends on the base bundle's `sessionProjections`, `settings` and `configEditor` — missing ones degrade gracefully: no projections → sidebar marker / progress card unavailable; no settings → read-only config;
 - **Node.js >= 22.19.0** (the client uses React 18+ `useSyncExternalStore`);
-- **Creation happens only in `agent/created`** and only for top-level new sessions with `source === 'startup'`; resume / clear / compaction / subagents / taskboard sessions / matching presets / disable marker / `enabled: false` / existing record / placement=local never create one;
+- **Creation happens only on the first step of a Session's first turn** and only for top-level Sessions whose recorded creation source is `startup`; resume / clear / compaction / subagents / taskboard sessions / matching presets / disable marker / `enabled: false` / existing record / placement=local never create one. A blank Session that is opened and never used creates nothing, so a placement choice made in it is read at send time and cannot lag one Session behind;
 - **No new Workspace**: sessions stay in their original workspace; only the cwd changes;
 - **No naming, no branch** (detached by default); `mode: branch` is opt-in; the plugin never merges, pushes or deletes user branches;
 - **Non-Git workspaces**: the selector is hidden and nothing is created;
 - **Read-only sandbox / workspace-write boundary / no commit / limit**: structured errors that never block the session;
-- concurrent creation in one repository is serialized by `createKeyedMutex`; any exception inside `agent/created` is swallowed and warned about, so the plugin can never prevent a session from starting;
+- concurrent creation in one repository is serialized by `createKeyedMutex`; any exception inside the `agent/pre-step` listener is swallowed and warned about, so the plugin can never prevent a session from starting or block the first message;
 - projection events enter the session log (~4 per new session), the cost of zero polling; an ephemeral channel could replace them later (out of scope for this release);
-- **known limitation**: cleaning a non-live session's checkout from the settings page leaves its sidebar marker until that session's next `agent/created` consistency repair (see 2.4);
+- **known limitation**: cleaning a non-live session's checkout from the settings page leaves its sidebar marker until that session's next consistency repair (reopening the session or its first step; see 2.4);
 - **seat choice (by design, not a limitation)**: the placement pill registers in the official `conversation.hero.options` list seat, **not** the single-value `conversation.hero.workspace` seat owned by the shipped WorkspacePicker (that seat is `kind: "single"` with `replaceRisk: "shadows-shipped-ui"`), so the shipped workspace switcher is **never shadowed**; the sidebar marker uses the official ambient-marker seat `sidebar.session.row.leading`, not the hover-only row action strip;
 - the sidebar marker is only a marker: not clickable, no hover card, no navigation;
 - the "don't use a worktree" rollback feature is **explicitly out of scope**; the progress card's "Cancel" only hides the card.
@@ -437,13 +449,13 @@ Out of scope: cloud / Codex Web integration / multiple placements; automatic mer
 | Symptom | Action |
 | --- | --- |
 | No placement selector on the new-session hero row | It only shows for a blank new session whose workspace is a Git repository; existing sessions and non-Git workspaces hide it (check `isGit` from the `placement` RPC). |
-| Selected "New local worktree" but nothing was created | Confirm the workspace's placement is still `worktree` (it is remembered per workspace and may have been switched to `local`); look for the `agent/created` skip reason in the session log; confirm `enabled: true`, the repository has a commit, `maxPerRepo` is not reached and there is no disable marker. |
+| Selected "New local worktree" but nothing was created | Confirm the workspace's placement is still `worktree` when you send the first message (it is remembered per workspace and may have been switched to `local`); look for the first-step skip reason in the session log; confirm `enabled: true`, the repository has a commit, `maxPerRepo` is not reached and there is no disable marker. |
 | Chose "Local" but an earlier session still runs in a worktree | Placement only affects **future** sessions; existing sessions keep their cwd. Clean their checkouts from the settings page if needed. |
 | The progress card shows an error | Follow the error code: `not-git-repository` / `no-commit` / `disabled` / `root-unreachable` / `limit-reached`; the session continues in its original directory and the conversation is not blocked. |
 | The progress card is stuck on "Check out files" | git may be hanging or timing out: check that `git` is on PATH and the repository is healthy; raise `gitTimeoutMs` if needed. |
 | Settings save reports "configuration was changed elsewhere" | Revision conflict: the form refreshed automatically, confirm and save again; both forms (Plugins page / this page) share one revision. |
 | Settings save reports `settings-unavailable` | This composition has no settings service (headless / non-profile): config degrades to read-only; edit the active profile's `cordis.patch.yml` (`- id: codex-worktree`) and restart. |
-| Managed sessions have no sidebar icon | The icon only shows when the projection is `phase === 'ready'`; after cleaning a non-live session it clears on the next `agent/created`. Confirm both server and client restarted on 0.5.0. |
+| Managed sessions have no sidebar icon | The icon only shows when the projection is `phase === 'ready'`; after cleaning a non-live session it clears on the next consistency repair. Confirm both server and client restarted on 0.5.1. |
 | Cleanup fails with `worktree-in-use` | The checkout directory is the cwd of **another** live session (Codex-compatible refusal): run `/wt-clean` from that session (its cwd is moved back to the workspace), or override with `force` / "force clean" once it no longer needs the directory; note this loses that session's working directory and uncommitted changes. |
 | No restore entry point / empty snapshot list | Snapshots are only created when deleting a detached checkout whose `HEAD ≠ baseCommit` (see 6.2); use `/wt-snapshots` to check the current session's repository (all repositories when unmanaged), and open the "worktree management" block in the settings page. |
 | Restored but cannot find the new checkout in the managed list | Restores produce a plain git worktree (`wt-restored-…`) that is not written to sidecar records, so it is not in the managed list; use the path returned by `/wt-restore` or `git worktree list`, and remove it with `git worktree remove`. |
@@ -459,9 +471,9 @@ Out of scope: cloud / Codex Web integration / multiple placements; automatic mer
 dsh-codex-style-worktree/
 ├── install.mjs          # direct install: copy into the profile + append the marked block (--dry-run / --profile)
 ├── uninstall.mjs        # direct uninstall: drop the marked block + remove the directory (idempotent, --dry-run)
-├── package.json         # 0.5.0; exports "." (host) / "./client" (web); engines node >=22.19
+├── package.json         # 0.5.1; exports "." (host) / "./client" (web); engines node >=22.19
 ├── cordis.patch.yml     # plain insert row (id: codex-worktree, no config)
-├── lib/                 # host half: config defaults/validation, volatile live config, agent/created creation,
+├── lib/                 # host half: config defaults/validation, volatile live config, first-message creation,
 │                        # git wrapper, pool rules, cleanup guard (worktree-in-use), snapshot/restore, archive lazy sweep,
 │                        # sidecar v3 (records + placements + snapshots), session projection,
 │                        # RPC routes (placement/settings/status/list/clean/prune/restore), commands

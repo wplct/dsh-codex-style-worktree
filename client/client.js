@@ -56,8 +56,9 @@ window.__ModuleLoader__.load({
      * RPC endpoints registered by the host half.
      *
      * There is no `create` and no `cancel`: worktrees are created only by the
-     * host's `agent/created` hook, and the progress card's cancel is a
-     * client-side hide. Placement and settings back the new 0.3.0 surfaces.
+     * host on the first message (first-turn `agent/pre-step`), and the progress
+     * card's cancel is a client-side hide. Placement and settings back the
+     * 0.3.0+ surfaces.
      */
     var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'placement', 'settings', 'restore']
 

@@ -106,7 +106,8 @@ Projection shape (`null` when the session is unmanaged):
 The host appends `codex-worktree/state` with the **complete post-change state**, so the
 client never reconstructs state from deltas. Host-side cleanup of a live session appends
 `null`, so the marker disappears immediately; a non-live session's stale marker is cleared
-by the host's next `agent/created` consistency repair (see the known limitation below).
+by the host's next consistency repair (reopening the session or its first step; see the
+own limitation below).
 
 ## Placement selector (`conversation.hero.options`)
 
@@ -221,8 +222,9 @@ is addressable at `/api/dsh-codex-style-worktree/<endpoint>`, with
 | `settings` | `{action:'get'}` / `{action:'set', patch, revision}` / `{action:'reset'}` | `{ ns, revision, writable, values, defaults, fields }` |
 | `restore` | `{ ref }` (required) | `{ ref, path, commit, repoRoot }` — a new detached checkout, not bound to the original session, with no cwd switch and no sidecar record |
 
-There is **no `create` and no `cancel`** endpoint: creation is triggered only by the host's
-`agent/created`, and the progress card's cancel is a client-side hide.
+There is **no `create` and no `cancel`** endpoint: creation is triggered only by the
+Session's first message (first-turn `agent/pre-step`), and the progress card's cancel is a
+client-side hide.
 
 Failures arrive as `{ ok: false, error: { code, message, details: { issues } } }` and are
 rendered inline; `details.issues` is appended to the message. Public codes:
@@ -269,7 +271,8 @@ description through the generic `settings.edit.<key>` lookup.
 
 Cleaning a **non-live** session's checkout from the settings page cannot append a
 projection event for that session (no live session to write to), so its sidebar marker
-disappears only on that session's next `agent/created` consistency repair. Live sessions
+disappears only on that session's next consistency repair (reopening the session or its
+first step). Live sessions
 are cleaned immediately via the projection push.
 
 Seat choices are deliberate: the placement pill lives in the official

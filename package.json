@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-style-worktree",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Codex 风格 Worktree：新建会话时在工作区旁选择「本地」或「新建本地工作树」，发送首条消息后自动创建独立检出并在输入框上方显示进度，侧边栏标记托管会话；清理有保护、删除前留可恢复快照，所有配置都能在设置页在线修改。",
   "license": "MIT",
   "author": "wplct",

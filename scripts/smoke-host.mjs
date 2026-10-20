@@ -5,7 +5,8 @@
  * The real plugin mounts inside the DSH app where `@deepseek-ai/*` peers exist.
  * This script recreates that situation in a temp directory — copied plugin plus
  * minimal peer stubs — then mounts the plugin against a fake DSH context and
- * drives one `agent/created` through a real repository. It catches import-path
+ * drives one blank Session through its first message (`agent/created` → no
+ * checkout, first-turn `agent/pre-step` → checkout) through a real repository. It catches import-path
  * mistakes, export-shape mistakes — command/route/projection/settings
  * registration mistakes and an `apply()` that throws, none of which unit tests
  * of pure modules can see.
@@ -293,6 +294,8 @@ export default z
   check('module exports required injects', Array.isArray(mod.inject) && mod.inject.includes('agents'))
   mod.apply(ctx, { directory: '.agents/worktrees', pruneGraceMs: 0, autoPrune: false })
   check('agent/created listener registered', captured.listeners.has('agent/created'))
+  check('first-message listener registered', captured.listeners.has('agent/pre-step'))
+  check('agent/disposed listener registered', captured.listeners.has('agent/disposed'))
   check('volatile-update listener registered', captured.listeners.has('loader/volatile-update'))
   check('no model tool is registered', captured.tools.length === 0, String(captured.tools.length))
   check('4 slash commands registered', captured.commands.length === 4, String(captured.commands.length))
@@ -300,7 +303,7 @@ export default z
   check('projection is client-visible (wire block)', captured.projection?.wire?.viewSchema !== undefined)
   check('official auto settings form advertised', captured.settingsConfigure?.presentation?.auto === true)
   // The routes are the RPC surface of lib/constants.js. `create` and `cancel` are
-  // deliberately absent: creation happens in agent/created, cancel is client-only.
+  // deliberately absent: creation happens on the first message, cancel is client-only.
   const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'placement', 'settings', 'restore']
   check(
     `${expectedEndpoints.length} routes registered`,
@@ -316,6 +319,48 @@ export default z
   check('no create route', !captured.routes.some((route) => route.path.endsWith('/create')))
 
   // ---- 4. Drive one agent through the real lifecycle ---------------------
+  // The routes are available right after mount, so the envelope helper comes
+  // before the lifecycle: the blank Session's placement write is part of it.
+  const call = async (endpoint, payload, rpcId = `rpc-${endpoint}`) => {
+    const route = captured.routes.find((candidate) => candidate.path === `/api/dsh-codex-style-worktree/${endpoint}`)
+    const response = await route.fetch({
+      headers: { get: () => 'application/json', },
+      json: async () => ({ rpcId, method: `dsh-codex-style-worktree/${endpoint}`, payload }),
+    })
+    return (await response.json()).result
+  }
+  const firstTurn = (target, turn = 1) =>
+    captured.listeners.get('agent/pre-step')(
+      { agent: target, turn, step: 1, messages: [], signal: undefined },
+      () => ({ kind: 'enter' }),
+    )
+  const worktreeList = () => git(repo, ['worktree', 'list', '--porcelain'])
+
+  const blankAgent = {
+    id: 'session-blank',
+    session: { id: 'session-blank', header: { cwd: repo }, append: () => undefined },
+    inject: () => undefined,
+  }
+  roots.push(blankAgent)
+
+  // Regression guard: the desktop fires `agent/created` when the blank Session
+  // appears, long before the first prompt. Creating a checkout there is what made
+  // a placement choice apply one Session late, so it must create nothing.
+  await captured.listeners.get('agent/created')({ agent: blankAgent, source: 'startup', signal: undefined })
+  check('blank session keeps the workspace directory', ctx.workingDirectory.get(blankAgent.session) === repo)
+  check('blank session creates no checkout', !worktreeList().includes('.agents/worktrees'), worktreeList())
+
+  // The choice made in the blank Session applies to that same Session: switching
+  // to local before sending must be respected by this Session's first message.
+  await call('placement', { workspacePath: repo, mode: 'local' })
+  await firstTurn(blankAgent)
+  check('a local choice taken in the blank session applies to its first message', ctx.workingDirectory.get(blankAgent.session) === repo)
+  check('local first message creates no checkout', !worktreeList().includes('.agents/worktrees'), worktreeList())
+  await firstTurn(blankAgent, 2)
+  check('later turns do not retry a decided session', ctx.workingDirectory.get(blankAgent.session) === repo)
+
+  // Back to worktree, then a fresh Session: its first message creates one.
+  check('placement can be switched back to worktree', (await call('placement', { workspacePath: repo, mode: 'worktree' }))?.ok === true)
   const appended = []
   const agent = {
     id: 'session-smoke',
@@ -330,11 +375,13 @@ export default z
   }
   roots.push(agent)
   await captured.listeners.get('agent/created')({ agent, source: 'startup', signal: undefined })
+  check('blank session still creates nothing after a worktree placement', ctx.workingDirectory.get(agent.session) === repo)
+  await firstTurn(agent)
   const cwd = ctx.workingDirectory.get(agent.session)
   const { realpath } = await import('node:fs/promises')
   const expectedPool = join(await realpath(repo), '.agents', 'worktrees')
   check('session cwd moved into a worktree', (await realpath(cwd)).startsWith(expectedPool), cwd)
-  const worktrees = git(repo, ['worktree', 'list', '--porcelain'])
+  const worktrees = worktreeList()
   check('checkout registered with git', worktrees.includes(cwd), worktrees)
   check('main checkout stays clean', git(repo, ['status', '--porcelain']) === '')
 
@@ -361,14 +408,6 @@ export default z
   )
 
   // ---- 5. Drive the client routes through the envelope -------------------
-  const call = async (endpoint, payload, rpcId = `rpc-${endpoint}`) => {
-    const route = captured.routes.find((candidate) => candidate.path === `/api/dsh-codex-style-worktree/${endpoint}`)
-    const response = await route.fetch({
-      headers: { get: () => 'application/json', },
-      json: async () => ({ rpcId, method: `dsh-codex-style-worktree/${endpoint}`, payload }),
-    })
-    return (await response.json()).result
-  }
 
   const list = await call('list', {})
   check('list route answers the rpc envelope', list?.ok === true, JSON.stringify(list).slice(0, 300))
@@ -401,6 +440,7 @@ export default z
   }
   roots.push(localAgent)
   await captured.listeners.get('agent/created')({ agent: localAgent, source: 'startup', signal: undefined })
+  await firstTurn(localAgent)
   check('local placement leaves the session in the workspace', ctx.workingDirectory.get(localAgent.session) === repo)
 
   // ---- 5b. Settings bridge ------------------------------------------------
