@@ -87,6 +87,7 @@ export function createFakeCtx(options = {}) {
     },
     agents: {
       roots: () => [...roots],
+      list: () => [...roots],
       get: (id) => roots.find((agent) => agent.session?.id === id) ?? undefined,
     },
     workingDirectory: {
@@ -97,6 +98,7 @@ export function createFakeCtx(options = {}) {
     },
   }
   if (options.sandboxPolicy !== undefined) ctx.sandboxPolicy = options.sandboxPolicy
+  if (options.workspaceRegistry !== undefined) ctx.workspaceRegistry = options.workspaceRegistry
   return { ctx, logs, roots }
 }
 

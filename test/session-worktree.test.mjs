@@ -386,3 +386,101 @@ test('a Cordis context that throws on uninjected services still creates a worktr
   const result = await runtime.ensureForAgent({ agent, source: 'startup' })
   assert.equal(result.created, true, JSON.stringify(result))
 })
+
+test('clean refuses a checkout another live session is working in, and force overrides', async () => {
+  const env = await setup()
+  const owner = createAgent(env.repo, 'session-owner')
+  const guest = createAgent(env.repo, 'session-guest')
+  env.roots.push(owner, guest)
+  const created = await detach(env, owner)
+  assert.equal(created.created, true)
+  await env.ctx.workingDirectory.set(guest, created.record.path)
+
+  await assert.rejects(
+    () => env.runtime.clean({ sessionId: owner.session.id, session: owner.session }),
+    (error) => error.code === 'worktree-in-use' && error.details.path === created.record.path,
+  )
+
+  const forced = await env.runtime.clean({ sessionId: owner.session.id, session: owner.session, force: true })
+  assert.equal(forced.removed, true)
+  assert.equal(existsSync(created.record.path), false)
+  assert.equal(await env.store.get(owner.session.id), null)
+})
+
+test('cleaning your own checkout moves the session back to the workspace root', async () => {
+  const env = await setup()
+  const agent = createAgent(env.repo, 'session-self')
+  env.roots.push(agent)
+  const created = await detach(env, agent)
+  assert.equal(env.ctx.workingDirectory.get(agent.session), created.record.path)
+
+  const cleaned = await env.runtime.clean({ sessionId: agent.session.id, session: agent.session })
+  assert.equal(cleaned.removed, true)
+  assert.equal(cleaned.movedTo, created.record.workspaceRoot)
+  assert.equal(env.ctx.workingDirectory.get(agent.session), created.record.workspaceRoot)
+  assert.equal(await env.store.get(agent.session.id), null)
+})
+
+test('a detached checkout with new commits is snapshotted on clean and can be restored', async () => {
+  const env = await setup()
+  const agent = createAgent(env.repo, 'session-snapshot')
+  env.roots.push(agent)
+  const created = await detach(env, agent)
+  const record = created.record
+
+  await writeFile(join(record.path, 'b.txt'), 'b\n', 'utf8')
+  git(record.path, ['add', '.'])
+  git(record.path, ['commit', '-qm', 'work'])
+  const head = git(record.path, ['rev-parse', 'HEAD'])
+
+  const cleaned = await env.runtime.clean({ sessionId: agent.session.id, session: agent.session })
+  assert.equal(cleaned.removed, true)
+  assert.equal(cleaned.snapshots.length, 1)
+  const [snapshot] = cleaned.snapshots
+  assert.equal(snapshot.commit, head)
+  assert.equal(git(env.repo, ['rev-parse', snapshot.ref]), head)
+  assert.equal((await env.store.snapshots()).length, 1)
+  assert.equal(git(env.repo, ['for-each-ref', '--format=%(refname)', 'refs/dsh-codex-worktree']).includes(snapshot.ref), true)
+
+  const restored = await env.runtime.restoreSnapshot({ ref: snapshot.ref })
+  assert.equal(git(restored.path, ['rev-parse', 'HEAD']), head)
+  assert.ok(existsSync(join(restored.path, 'b.txt')))
+  assert.match(restored.path, /wt-restored-/)
+  assert.throws(() => git(restored.path, ['symbolic-ref', '-q', 'HEAD']), /exited with|Command failed/)
+  assert.equal((await env.store.getSnapshot(snapshot.ref))?.restoredPath, restored.path)
+
+  await assert.rejects(
+    () => env.runtime.restoreSnapshot({ ref: 'refs/dsh-codex-worktree/missing' }),
+    (error) => error.code === 'snapshot-not-found',
+  )
+  await assert.rejects(() => env.runtime.restoreSnapshot({ ref: '  ' }), (error) => error.code === 'bad-request')
+})
+
+test('cleanupOnArchive sweeps archived clean checkouts and leaves dirty ones alone', async () => {
+  const env = await setup({ cleanupOnArchive: true })
+  env.ctx.workspaceRegistry = { archivedSessionIds: [] }
+  const keeper = createAgent(env.repo, 'session-keep')
+  const archivedClean = createAgent(env.repo, 'session-archived-clean')
+  const archivedDirty = createAgent(env.repo, 'session-archived-dirty')
+  env.roots.push(keeper, archivedClean, archivedDirty)
+
+  await detach(env, keeper)
+  const cleanRecord = (await detach(env, archivedClean)).record
+  const dirtyRecord = (await detach(env, archivedDirty)).record
+  await writeFile(join(dirtyRecord.path, 'dirty.txt'), 'x\n', 'utf8')
+
+  env.ctx.workspaceRegistry.archivedSessionIds = [archivedClean.session.id, archivedDirty.session.id]
+  const sweep = await env.runtime.sweepArchived({})
+  assert.equal(sweep.removed.length, 1)
+  assert.equal(sweep.removed[0].sessionId, archivedClean.session.id)
+  assert.equal(existsSync(cleanRecord.path), false)
+  assert.equal(existsSync(dirtyRecord.path), true)
+  assert.equal(await env.store.get(archivedClean.session.id), null)
+  assert.ok(await env.store.get(archivedDirty.session.id))
+  assert.ok(await env.store.get(keeper.session.id))
+
+  // Default is off: the same sweep is a no-op without the setting.
+  const off = await setup()
+  off.ctx.workspaceRegistry = { archivedSessionIds: ['session-any'] }
+  assert.deepEqual(await off.runtime.sweepArchived({}), { removed: [] })
+})

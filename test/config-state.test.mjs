@@ -41,7 +41,7 @@ test('resolvePlacement accepts only the two documented values', () => {
 
 test('editable metadata and defaults agree with resolveConfig', () => {
   const defaults = editableDefaults()
-  assert.equal(EDITABLE_FIELDS.length, 20)
+  assert.equal(EDITABLE_FIELDS.length, 21)
   assert.deepEqual(
     EDITABLE_FIELDS.map((field) => field.key),
     [
@@ -57,6 +57,7 @@ test('editable metadata and defaults agree with resolveConfig', () => {
       'autoPrune',
       'autoPruneKeep',
       'pruneGraceMs',
+      'cleanupOnArchive',
       'poolGitignore',
       'gitTimeoutMs',
       'skipChildAgents',
@@ -117,7 +118,8 @@ test('coerceState drops unknown shapes and malformed records', () => {
   })
   assert.deepEqual(Object.keys(state.records), ['a'])
   assert.deepEqual(state.placements, {})
-  assert.equal(state.schemaVersion, 2)
+  assert.deepEqual(state.snapshots, {})
+  assert.equal(state.schemaVersion, 3)
 })
 
 test('coerceState migrates a v1 document and validates placement rows', () => {
@@ -130,7 +132,7 @@ test('coerceState migrates a v1 document and validates placement rows', () => {
       '': { mode: 'worktree' },
     },
   })
-  assert.equal(state.schemaVersion, 2)
+  assert.equal(state.schemaVersion, 3)
   assert.deepEqual(Object.keys(state.records), ['a'])
   assert.deepEqual(Object.keys(state.placements), ['/repo'])
   assert.equal(state.placements['/repo'].mode, 'local')
@@ -150,8 +152,9 @@ test('the store remembers one placement per canonical workspace path', async () 
 
   // A v1 sidecar on disk is adopted and rewritten with placements.
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
-  assert.equal(raw.schemaVersion, 2)
+  assert.equal(raw.schemaVersion, 3)
   assert.equal(raw.placements['/repo'].mode, 'local')
+  assert.deepEqual(raw.snapshots, {})
 })
 
 test('stale placements are dropped past the retention window', async () => {
@@ -198,4 +201,50 @@ test('a corrupt sidecar is moved aside instead of overwritten silently', async (
   assert.deepEqual(await store.list(), [])
   const files = await import('node:fs/promises').then((fs) => fs.readdir(dir))
   assert.ok(files.some((name) => name.startsWith('state.json.corrupt-')), `backup missing in ${files.join(',')}`)
+})
+
+test('coerceState migrates a v2 document and keeps only well-formed snapshot rows', () => {
+  const { state } = coerceState({
+    schemaVersion: 2,
+    records: { a: { path: '/p', repoRoot: '/r' } },
+    placements: { '/repo': { mode: 'local', updatedAt: '2026-01-01T00:00:00.000Z' } },
+    snapshots: {
+      'refs/dsh-codex-worktree/261020-120000-123456': {
+        ref: 'refs/dsh-codex-worktree/261020-120000-123456',
+        repoRoot: '/r',
+        commit: 'a'.repeat(40),
+        sessionId: 'session-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      malformed: { repoRoot: '/r' },
+      '/also-bad': { ref: '/also-bad', commit: 'abc' },
+    },
+  })
+  assert.equal(state.schemaVersion, 3)
+  assert.deepEqual(Object.keys(state.records), ['a'])
+  assert.deepEqual(Object.keys(state.placements), ['/repo'])
+  assert.deepEqual(Object.keys(state.snapshots), ['refs/dsh-codex-worktree/261020-120000-123456'])
+  assert.equal(state.snapshots['refs/dsh-codex-worktree/261020-120000-123456'].commit, 'a'.repeat(40))
+})
+
+test('the store round-trips snapshot rows and marks restores durably', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dwt-state-'))
+  const store = createStateStore(join(dir, 'state.json'))
+  assert.deepEqual(await store.snapshots(), [])
+  const ref = 'refs/dsh-codex-worktree/261020-120000-123456'
+  await store.setSnapshot({
+    ref,
+    repoRoot: '/repo',
+    commit: 'b'.repeat(40),
+    sessionId: 'session-1',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  })
+  assert.equal((await store.getSnapshot(ref))?.commit, 'b'.repeat(40))
+  assert.equal((await store.snapshots('/repo')).length, 1)
+  assert.equal((await store.snapshots('/other')).length, 0)
+  const marked = await store.markSnapshotRestored(ref, '/repo/.agents/worktrees/wt-restored-1')
+  assert.equal(marked?.restoredPath, '/repo/.agents/worktrees/wt-restored-1')
+  const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
+  assert.equal(raw.schemaVersion, 3)
+  assert.equal(raw.snapshots[ref].restoredPath, '/repo/.agents/worktrees/wt-restored-1')
 })

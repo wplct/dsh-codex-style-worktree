@@ -489,7 +489,7 @@ function settingsDescriptor(overrideValues) {
   }
 }
 function listValue() {
-  return {
+  const value = {
     repos: [
       {
         repoRoot: '/repo',
@@ -508,6 +508,28 @@ function listValue() {
     ],
     config: {},
   }
+  if (listBehavior.withSnapshots) {
+    value.snapshots = [
+      {
+        ref: 'refs/dsh-codex-worktree/wt-2026-10-19-4f2a',
+        repoRoot: '/repo',
+        commit: 'deadbeefcafe0123',
+        sessionId: 's9',
+        path: '/repo/.agents/worktrees/wt-old',
+        createdAt: '2026-10-19T09:00:00.000Z',
+      },
+      {
+        ref: 'refs/dsh-codex-worktree/wt-2026-10-18-a1b2',
+        repoRoot: '/repo',
+        commit: '0123456789abcdef',
+        sessionId: 's8',
+        createdAt: '2026-10-18T08:00:00.000Z',
+        restoredAt: '2026-10-19T10:30:00.000Z',
+        restoredPath: '/repo/.agents/worktrees/wt-restored',
+      },
+    ]
+  }
+  return value
 }
 function defaultHandler(endpoint, payload) {
   if (endpoint === 'dsh-codex-worktree/placement') {
@@ -533,7 +555,25 @@ function defaultHandler(endpoint, payload) {
   }
   if (endpoint === 'dsh-codex-worktree/list') return { ok: true, value: listValue() }
   if (endpoint === 'dsh-codex-worktree/prune') return { ok: true, value: { removed: [{ path: '/repo/x', sessionId: 's9' }], snapshots: [] } }
-  if (endpoint === 'dsh-codex-worktree/clean') return { ok: true, value: { removed: true, path: '/repo/.agents/worktrees/wt-abc', branchDeleted: false } }
+  if (endpoint === 'dsh-codex-worktree/clean') {
+    if (cleanBehavior.nextError) {
+      const error = cleanBehavior.nextError
+      cleanBehavior.nextError = null
+      return { ok: false, error }
+    }
+    return { ok: true, value: { removed: true, path: '/repo/.agents/worktrees/wt-abc', branchDeleted: false } }
+  }
+  if (endpoint === 'dsh-codex-worktree/restore') {
+    if (restoreBehavior.nextError) {
+      const error = restoreBehavior.nextError
+      restoreBehavior.nextError = null
+      return { ok: false, error }
+    }
+    return {
+      ok: true,
+      value: { ref: payload.ref, path: '/repo/.agents/worktrees/wt-restored', commit: 'deadbeefcafe0123', repoRoot: '/repo' },
+    }
+  }
   if (endpoint === 'dsh-codex-worktree/settings') {
     if (payload.action === 'get') {
       if (settingsBehavior.getError) return { ok: false, error: settingsBehavior.getError }
@@ -559,6 +599,9 @@ function defaultHandler(endpoint, payload) {
 }
 const placementBehavior = { isGit: true, respond: null }
 const settingsBehavior = { getError: null, setError: null }
+const cleanBehavior = { nextError: null }
+const restoreBehavior = { nextError: null }
+const listBehavior = { withSnapshots: true }
 
 /* ================================================================== *
  * Load the artifact                                                   *
@@ -884,6 +927,29 @@ async function main() {
   const errorChip = findAll(errorChipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0]
   check('chip shows the error state', errorChip ? textOf(errorChip).indexOf('Status unknown') !== -1 : false, errorChip ? textOf(errorChip) : '')
 
+  // ---- worktree-in-use: chip popover → force retry ----
+  setProjection('s-chip-in-use', projection('ready', null, { branch: 'wt/in-use' }))
+  let inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  findAll(inUseChipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0].props.onClick()
+  inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  await flush()
+  inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  byText(inUseChipTree, 'Clean worktree').props.onClick()
+  inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  cleanBehavior.nextError = { code: 'worktree-in-use', message: '/repo/.agents/worktrees/wt-abc is in use by an active session', details: {} }
+  byText(inUseChipTree, 'Confirm cleanup').props.onClick()
+  await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  await flush()
+  inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  check('chip popover explains worktree-in-use', textOf(inUseChipTree).indexOf('working directory of an active session') !== -1)
+  const forceCleanButton = findAll(inUseChipTree, (node) => node.type === 'button' && node.props['data-action'] === 'force-clean')[0]
+  check('chip popover offers force cleanup', Boolean(forceCleanButton))
+  forceCleanButton.props.onClick()
+  await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
+  await flush()
+  const chipCleans = callsFor('clean')
+  check('chip force cleanup retries with force=true', chipCleans[chipCleans.length - 1]?.payload.force === true, JSON.stringify(chipCleans[chipCleans.length - 1]?.payload))
+
   /* ================================================================ *
    * 5. Settings: editable config + management list                    *
    * ================================================================ */
@@ -985,7 +1051,62 @@ async function main() {
   await render(settingsEntry, settingsProps, 'settings-config')
   await flush()
   const cleanCalls = callsFor('clean')
-  check('delete calls clean with force=false and deleteBranch=true', Boolean(cleanCalls[0]) && cleanCalls[0].payload.force === false && cleanCalls[0].payload.deleteBranch === true, JSON.stringify(cleanCalls[0]?.payload))
+  const settingsDeleteClean = cleanCalls.find((call) => call.payload.force === false && call.payload.deleteBranch === true)
+  check('delete calls clean with force=false and deleteBranch=true', Boolean(settingsDeleteClean), JSON.stringify(settingsDeleteClean?.payload))
+
+  // ---- recoverable snapshots (v0.4.0) ----
+  settingsTree = await render(settingsEntry, settingsProps, 'settings-config')
+  settingsText = textOf(settingsTree)
+  check('snapshots block renders under its repository', Boolean(findAll(settingsTree, (node) => node.props && node.props['data-dsh-codex-worktree-snapshots'] !== undefined)[0]))
+  check('snapshots block shows the title', settingsText.indexOf('Recoverable snapshots') !== -1)
+  check('snapshots block shows the count', settingsText.indexOf('2 snapshots') !== -1)
+  check('snapshot ref tail rendered', settingsText.indexOf('\u2026/wt-2026-10-19-4f2a') !== -1, settingsText.slice(0, 300))
+  check('snapshot short commit rendered', settingsText.indexOf('deadbeef') !== -1)
+  check('restored snapshot badge rendered', settingsText.indexOf('Restored') !== -1)
+  check('restored snapshot path rendered', settingsText.indexOf('/repo/.agents/worktrees/wt-restored') !== -1)
+
+  const restoreButton = findAll(settingsTree, (node) => node.type === 'button' && node.props['data-action'] === 'restore')[0]
+  check('restore button rendered', Boolean(restoreButton))
+  const listCallsBeforeRestore = callsFor('list').length
+  restoreButton.props.onClick()
+  await render(settingsEntry, settingsProps, 'settings-config')
+  await flush()
+  await render(settingsEntry, settingsProps, 'settings-config')
+  const restoreCalls = callsFor('restore')
+  check('restore calls the restore endpoint once', restoreCalls.length === 1, String(restoreCalls.length))
+  check('restore payload is {ref}', JSON.stringify(restoreCalls[0]?.payload) === JSON.stringify({ ref: 'refs/dsh-codex-worktree/wt-2026-10-19-4f2a' }), JSON.stringify(restoreCalls[0]?.payload))
+  const afterRestoreTree = await render(settingsEntry, settingsProps, 'settings-config')
+  check('restore reports the restored path', textOf(afterRestoreTree).indexOf('Restored to /repo/.agents/worktrees/wt-restored') !== -1, textOf(afterRestoreTree).slice(0, 300))
+  check('restore refreshes the worktree list', callsFor('list').length > listCallsBeforeRestore, `${listCallsBeforeRestore} -> ${callsFor('list').length}`)
+
+  // Old hosts (no snapshots field) must still render.
+  listBehavior.withSnapshots = false
+  const legacyListTree = await render(settingsEntry, settingsProps, 'settings-legacy-list')
+  const legacyListText = textOf(legacyListTree)
+  check('old host without snapshots renders the list', legacyListText.indexOf('/repo/.agents/worktrees/wt-abc') !== -1)
+  check('old host without snapshots renders no snapshot block', legacyListText.indexOf('Recoverable snapshots') === -1)
+  listBehavior.withSnapshots = true
+
+  // ---- worktree-in-use: settings delete → force retry ----
+  cleanBehavior.nextError = { code: 'worktree-in-use', message: '/repo/.agents/worktrees/wt-abc is in use by an active session', details: {} }
+  let inUseSettingsTree = await render(settingsEntry, settingsProps, 'settings-in-use')
+  await flush()
+  inUseSettingsTree = await render(settingsEntry, settingsProps, 'settings-in-use')
+  byText(inUseSettingsTree, 'Delete').props.onClick()
+  inUseSettingsTree = await render(settingsEntry, settingsProps, 'settings-in-use')
+  byText(inUseSettingsTree, 'Confirm delete').props.onClick()
+  await render(settingsEntry, settingsProps, 'settings-in-use')
+  await flush()
+  await render(settingsEntry, settingsProps, 'settings-in-use')
+  inUseSettingsTree = await render(settingsEntry, settingsProps, 'settings-in-use')
+  check('settings delete explains worktree-in-use', textOf(inUseSettingsTree).indexOf('working directory of an active session') !== -1, textOf(inUseSettingsTree).slice(0, 400))
+  const forceDeleteButton = findAll(inUseSettingsTree, (node) => node.type === 'button' && node.props['data-action'] === 'force-delete')[0]
+  check('settings delete offers a force action', Boolean(forceDeleteButton))
+  forceDeleteButton.props.onClick()
+  await render(settingsEntry, settingsProps, 'settings-in-use')
+  await flush()
+  const cleansAfterInUse = callsFor('clean')
+  check('settings force delete retries with force=true', cleansAfterInUse[cleansAfterInUse.length - 1]?.payload.force === true, JSON.stringify(cleansAfterInUse[cleansAfterInUse.length - 1]?.payload))
 
   // Headless degrade: settings service unavailable → read-only hint, no crash.
   settingsBehavior.getError = { code: 'settings-unavailable', message: 'no settings service', details: {} }
@@ -997,7 +1118,7 @@ async function main() {
   check('every RPC uses the /api channel', calls.every((call) => call.channel === '/api'), JSON.stringify(calls.slice(0, 3)))
   check(
     'every RPC endpoint carries the renamed namespace',
-    calls.every((call) => /^dsh-codex-worktree\/(status|clean|list|prune|placement|settings)$/.test(call.endpoint)),
+    calls.every((call) => /^dsh-codex-worktree\/(status|clean|list|prune|placement|settings|restore)$/.test(call.endpoint)),
     JSON.stringify([...new Set(calls.map((call) => call.endpoint))]),
   )
 

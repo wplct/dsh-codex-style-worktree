@@ -158,7 +158,12 @@ shipped workspace switcher is never shadowed.
 - Opening the popover makes **one** `status` RPC (`{ sessionId }`) to refresh live details
   (dirty count etc.); it is not a polling loop.
 - Popover: path, repository, base commit, mode, dirty count, plus a cleanup action
-  (`clean` with `force: false`; a dirty error offers the `force: true` retry).
+  (`clean` with `force: false`). A `worktree-dirty` error offers the force retry; a
+  `worktree-in-use` refusal renders `error.worktreeInUse` ("the working directory of an
+  active session; force cleanup will leave that session without a working directory") plus
+  an `error.forceCleanupAction` button that retries with `force: true`. Cleaning the
+  current session's **own** checkout is not refused: the host moves its cwd back to the
+  workspace (`movedTo`) before deleting.
 - No naming and no "don't use a worktree" action — branch naming belongs to Git at commit
   time.
 
@@ -173,7 +178,7 @@ Two blocks:
    - `set` → `{ action: 'set', patch, revision }`; a stale revision yields
      `error.code === 'conflict'`, after which the client refreshes the form and shows
      "configuration changed elsewhere";
-   - `reset` ("Restore defaults") writes the 20 user-visible defaults back;
+   - `reset` ("Restore defaults") writes the 21 user-visible defaults back (including `cleanupOnArchive`, which defaults to `false`);
    - `invalid-config` errors keep the previous values and show the violated constraint;
    - `settings-unavailable` degrades the block to read-only with the original hint.
    - Save is volatile: the host writes the active profile's `cordis.patch.yml` through the
@@ -181,8 +186,18 @@ Two blocks:
    - The official "Plugins" settings page gets an equivalent auto-generated form from the
      same schema/revision.
 2. **Worktree management** (existing UI): `list` → checkouts grouped by repository with
-   live dirty counts; `prune` (all or one repository) reports removed entries and snapshot
-   refs; per-row cleanup via `clean`.
+   live dirty counts, plus a **top-level `snapshots` array** (each row carries `repoRoot`,
+   newest first) that the page groups per repository; `prune` (all or one repository)
+   reports removed entries and snapshot refs; per-row cleanup via `clean`.
+   - The recoverable-snapshots block renders one row per snapshot (`ref`, `commit`,
+     `createdAt`, `restoredAt`/`restoredPath` when already restored) with a *Restore*
+     button that calls `restore({ ref })`, shows `settings.snapshots.restored` with the
+     returned path, and then refreshes the management list. The restored checkout is a
+     plain git worktree (`wt-restored-…`) and is **not written to sidecar records**, so it
+     does not appear as a managed row and does not take over the original session's cwd.
+   - Per-row delete uses `clean` with `force: false` and escalates to a force confirmation
+     for `worktree-dirty`; a `worktree-in-use` refusal opens the force confirmation with
+     `error.worktreeInUse`, and force deletes through `clean` with `force: true`.
 
 ## Host RPC surface
 
@@ -199,20 +214,23 @@ is addressable at `/api/dsh-codex-worktree/<endpoint>`, with
 | Endpoint | Request | Success value |
 | --- | --- | --- |
 | `status` | `{ sessionId }` | `{ managed, path?, workspaceRoot?, repoRoot?, mode?, branch?, baseCommit?, createdAt?, dirty? }` |
-| `list` | `{ workspacePath? }` | `{ repos: [{ repoRoot, records: [...] }], config }` |
-| `clean` | `{ sessionId, force?, deleteBranch? }` | `{ removed, path, branchDeleted }` |
+| `list` | `{ workspacePath? }` | `{ repos: [{ repoRoot, records: [...] }], snapshots: [...], config }` (top-level snapshots, each row carrying `repoRoot`) |
+| `clean` | `{ sessionId, force?, deleteBranch? }` | `{ removed, path, branchDeleted, snapshots, movedTo? }` (`alreadyGone: true` when the directory was already missing) |
 | `prune` | `{ repoRoot? }` | `{ removed, snapshots }` |
 | `placement` | read `{ workspacePath }`; write `{ workspacePath, mode }` | `{ workspacePath, mode, defaultMode, isGit }` |
 | `settings` | `{action:'get'}` / `{action:'set', patch, revision}` / `{action:'reset'}` | `{ ns, revision, writable, values, defaults, fields }` |
+| `restore` | `{ ref }` (required) | `{ ref, path, commit, repoRoot }` — a new detached checkout, not bound to the original session, with no cwd switch and no sidecar record |
 
 There is **no `create` and no `cancel`** endpoint: creation is triggered only by the host's
 `agent/created`, and the progress card's cancel is a client-side hide.
 
 Failures arrive as `{ ok: false, error: { code, message, details: { issues } } }` and are
 rendered inline; `details.issues` is appended to the message. Public codes:
-`bad-request`, `worktree-dirty`, `not-managed`, `not-git-repository`, `no-commit`,
-`disabled`, `root-unreachable`, `limit-reached`, `settings-unavailable`, `conflict`,
-`invalid-config`.
+`bad-request`, `worktree-dirty`, **`worktree-in-use`**, `not-managed`, `not-git-repository`,
+`no-commit`, `disabled`, `root-unreachable`, `limit-reached`, `settings-unavailable`,
+`conflict`, `invalid-config`, `snapshot-not-found`; other failures surface as
+`operation-failed`. `worktree-in-use` carries `details.sessionIds` for the sessions using
+the checkout.
 
 ## Controllers used
 
@@ -221,7 +239,7 @@ rendered inline; `details.issues` is appended to the message. Public codes:
 | Resolve the hero workspace | `workspaces.list.getSnapshot().items` (`{ workspaceId, path, title, sessionIds }`) | the selector maps `selectedId` → path; also accepts `byId` snapshots. |
 | Read a session projection | `sessions.list.getSnapshot().byId[sessionId].projectionValues.codexWorktree` + `sessions.list.subscribe` | progress / marker / chip base state; event-driven only. |
 | Resolve a conversation title | `sessions.list.getSnapshot()` | accepts `items`, `ids` and `byId`; title field is `displayTitle`, falling back to `title`/`name` (used by the management UI when it lists conversations). |
-| Clean / prune / list | `connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', …)` | see the RPC table. |
+| Clean / prune / list / restore | `connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', …)` | see the RPC table; `restore` creates an unmanaged detached checkout and the page then refreshes `list`. |
 
 The client never creates a Workspace and never creates a Session as part of worktree
 creation.
@@ -233,8 +251,11 @@ creation.
 `progress.finalize`, `progress.done`, `progress.cancel`, `progress.failed`;
 `marker.title`, `marker.tooltip`, `progress.reason`; `settings.edit.*`, `settings.save`,
 `settings.reset`, `settings.saved`, `settings.dirty`, `settings.conflict`,
-`settings.invalid`, `settings.unavailable`; plus the existing chip/popover/management
-strings.
+`settings.invalid`, `settings.unavailable`; `settings.snapshots.*` (`title`, `count`,
+`commit`, `created`, `restore`, `restoring`, `restored`, `restoreBadge`, `restoredAt`,
+`restoreFailed`); `error.worktreeInUse`, `error.forceCleanupAction`; plus the existing
+chip/popover/management strings. The new `cleanupOnArchive` field gets its label and
+description through the generic `settings.edit.<key>` lookup.
 
 ## Styling and failure isolation
 
@@ -258,6 +279,17 @@ single-value `conversation.hero.workspace` seat (`kind: "single"`,
 marker lives in the official ambient-marker seat `sidebar.session.row.leading`, not in the
 hover-only row action strip.
 
+Cleaning a checkout that is **another live session's current working directory** is refused
+with `worktree-in-use` (Codex-compatible); cleaning your own session's checkout moves its
+cwd back to the workspace instead. Force-cleaning overrides the guard and permanently
+takes the other session's working directory away; uncommitted changes are lost. Snapshots
+only cover the pre-delete committed `HEAD`, and a restored checkout is a plain git worktree
+that is not bound to the original session and not tracked as a managed record (remove it
+with `git worktree remove`). `cleanupOnArchive` is a lazy sweep (not a watcher), so the
+clean-up happens at the host's sweep triggers (after a successful creation, on `list`,
+on `prune`, and ~1 s after `workspace/session-stop`) rather than exactly at archive time;
+prune and the sweep skip an entry when its snapshot cannot be written.
+
 ## Verification hooks
 
 `scripts/smoke-client.mjs` evaluates this artifact under a `window.__ModuleLoader__`
@@ -265,5 +297,6 @@ stub with a hook-capable React stub, then asserts: the loader id, the plugin nam
 inject list, the five slot registrations and their ids, the placement selector's two states
 and non-Git hiding, the progress-card state machine (steps / done / cancel / error with a
 fake clock for the 1000 ms floor), the read-only marker (visible only on `ready`, not
-clickable), the settings form's save payload and conflict copy, the RPC namespace, and
-that the source contains no `setInterval` or polling.
+clickable), the settings form's save payload and conflict copy, the recoverable-snapshots
+block and the `restore` call, the `worktree-in-use` force confirmation, the RPC namespace,
+and that the source contains no `setInterval` or polling.

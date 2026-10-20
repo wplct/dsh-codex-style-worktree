@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex-worktree",
-  "version": "0.3.0",
-  "description": "Codex 风格 Worktree for DeepSeek Harness: choose 本地 / 新建本地工作树 per workspace on the new-session row; the checkout is created after the first prompt, its three steps stream through a session projection into an inline progress card, and the sidebar marks managed sessions read-only. Settings are editable in place and apply live. No naming — the branch belongs to Git at commit time.",
+  "version": "0.4.0",
+  "description": "Codex 风格 Worktree for DeepSeek Harness: choose 本地 / 新建本地工作树 per workspace on the new-session row; the checkout is created after the first prompt, its three steps stream through a session projection into an inline progress card, and the sidebar marks managed sessions read-only. Removal is guarded (an in-use checkout is refused unless forced), detached commits are saved as restorable snapshot refs (/wt-snapshots, /wt-restore), and an optional cleanupOnArchive setting sweeps archived sessions. Settings are editable in place and apply live. No naming — the branch belongs to Git at commit time.",
   "license": "MIT",
   "author": "wplct",
   "keywords": [
@@ -14,7 +14,10 @@
     "codex",
     "codex-worktree",
     "session-projection",
-    "settings"
+    "settings",
+    "cleanup",
+    "restore",
+    "snapshot"
   ],
   "type": "module",
   "main": "./lib/index.js",

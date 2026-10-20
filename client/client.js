@@ -59,7 +59,7 @@ window.__ModuleLoader__.load({
      * host's `agent/created` hook, and the progress card's cancel is a
      * client-side hide. Placement and settings back the new 0.3.0 surfaces.
      */
-    var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'placement', 'settings']
+    var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'placement', 'settings', 'restore']
 
     /**
      * `connection.rpc.call(channel, endpoint, payload, signal)` is the DSH wire
@@ -214,6 +214,18 @@ window.__ModuleLoader__.load({
       'settings.unavailable': 'Settings service unavailable. Change values in the profile cordis.patch.yml.',
       'settings.readOnly': 'Read-only',
       'settings.management.title': 'Worktree management',
+      'settings.snapshots.title': 'Recoverable snapshots',
+      'settings.snapshots.count': '{count} snapshots',
+      'settings.snapshots.commit': 'Commit',
+      'settings.snapshots.created': 'Created {time}',
+      'settings.snapshots.restore': 'Restore',
+      'settings.snapshots.restoring': 'Restoring\u2026',
+      'settings.snapshots.restored': 'Restored to {path}',
+      'settings.snapshots.restoreBadge': 'Restored',
+      'settings.snapshots.restoredAt': 'Restored {time}',
+      'settings.snapshots.restoreFailed': 'Restore failed: {message}',
+      'error.worktreeInUse': 'This worktree is the working directory of an active session; force cleanup will leave that session without a working directory.',
+      'error.forceCleanupAction': 'Force cleanup anyway',
     }
 
     var DICT_ZH = {
@@ -348,6 +360,18 @@ window.__ModuleLoader__.load({
       'settings.unavailable': '\u8bbe\u7f6e\u670d\u52a1\u4e0d\u53ef\u7528\uff0c\u8bf7\u5728 profile \u7684 cordis.patch.yml \u4e2d\u4fee\u6539\u3002',
       'settings.readOnly': '\u53ea\u8bfb',
       'settings.management.title': '\u5de5\u4f5c\u6811\u7ba1\u7406',
+      'settings.snapshots.title': '\u53ef\u6062\u590d\u5feb\u7167',
+      'settings.snapshots.count': '{count} \u4e2a\u5feb\u7167',
+      'settings.snapshots.commit': '\u63d0\u4ea4',
+      'settings.snapshots.created': '\u521b\u5efa\u4e8e {time}',
+      'settings.snapshots.restore': '\u6062\u590d',
+      'settings.snapshots.restoring': '\u6062\u590d\u4e2d\u2026',
+      'settings.snapshots.restored': '\u5df2\u6062\u590d\u5230 {path}',
+      'settings.snapshots.restoreBadge': '\u5df2\u6062\u590d',
+      'settings.snapshots.restoredAt': '\u6062\u590d\u4e8e {time}',
+      'settings.snapshots.restoreFailed': '\u6062\u590d\u5931\u8d25\uff1a{message}',
+      'error.worktreeInUse': '\u8be5\u5de5\u4f5c\u6811\u6b63\u88ab\u6d3b\u8dc3\u4f1a\u8bdd\u4f7f\u7528\uff0c\u5f3a\u5236\u5220\u9664\u4f1a\u8ba9\u90a3\u4e2a\u4f1a\u8bdd\u5931\u53bb\u5de5\u4f5c\u76ee\u5f55\u3002',
+      'error.forceCleanupAction': '\u4ecd\u7136\u5f3a\u5236\u6e05\u7406',
     }
 
     /** Active locale service (or null when the service is unavailable). */
@@ -581,6 +605,20 @@ window.__ModuleLoader__.load({
       return /dirty|uncommitted|not clean|worktree-not-clean|has changes|changed files|modified files/.test(haystack)
     }
 
+    /**
+     * The host refuses to delete a checkout that is an active Session's working
+     * directory (`worktree-in-use`); the only recovery is an explicit force retry.
+     */
+    function isWorktreeInUseError(error) {
+      var normalized = toError(error)
+      if (String(normalized.code || '') === 'worktree-in-use') return true
+      var haystack = [String(normalized.code || ''), String(normalized.message || '')]
+        .concat(issuesOf(normalized))
+        .join(' ')
+        .toLowerCase()
+      return /worktree-in-use|in use by an active session|active session(s?) working directory/.test(haystack)
+    }
+
     function readConnection(ctx) {
       if (!ctx) return null
       try {
@@ -652,6 +690,11 @@ window.__ModuleLoader__.load({
           if (typeof repoRoot === 'string' && repoRoot) payload.repoRoot = repoRoot
           return invoke('prune', payload, signal)
         },
+        /** Restore one recoverable snapshot by ref. Value: `{ref, path, commit, repoRoot}`. */
+        restore: function (ref, signal) {
+          return invoke('restore', { ref: ref }, signal)
+        },
+
         /**
          * Read or write the sticky work location for one Workspace.
          * Read: `placement(workspacePath)`; write: `placement(workspacePath, mode)`.
@@ -733,6 +776,46 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** One recoverable snapshot from the `list` envelope (old hosts send none). */
+    function normalizeSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return null
+      var ref = firstString(snapshot.ref)
+      if (!ref) return null
+      return {
+        ref: ref,
+        repoRoot: firstString(snapshot.repoRoot, snapshot.repo),
+        commit: firstString(snapshot.commit, snapshot.baseCommit),
+        sessionId: firstString(snapshot.sessionId),
+        path: firstString(snapshot.path),
+        createdAt: snapshot.createdAt !== undefined ? snapshot.createdAt : snapshot.created,
+        restoredAt: snapshot.restoredAt !== undefined ? snapshot.restoredAt : null,
+        restoredPath: firstString(snapshot.restoredPath),
+      }
+    }
+
+    /** Ref tail for display; the `title` attribute keeps the full ref. */
+    function shortSnapshotRef(ref) {
+      var text = String(ref == null ? '' : ref)
+      var segments = text.split('/').filter(function (segment) { return segment !== '' })
+      var tail = segments.length > 0 ? segments[segments.length - 1] : text
+      if (tail.length > 30) tail = tail.slice(0, 14) + '\u2026' + tail.slice(-10)
+      return segments.length > 1 ? '\u2026/' + tail : tail
+    }
+
+    /** Snapshots recorded for one repository, in host order. */
+    function snapshotsForRepo(snapshots, repoRoot) {
+      var key = String(repoRoot == null ? '' : repoRoot).replace(/[\\/]+$/, '')
+      var list = []
+      if (!Array.isArray(snapshots)) return list
+      for (var index = 0; index < snapshots.length; index += 1) {
+        var snapshot = snapshots[index]
+        if (!snapshot) continue
+        var snapshotRoot = String(snapshot.repoRoot == null ? '' : snapshot.repoRoot).replace(/[\\/]+$/, '')
+        if (snapshotRoot === key) list.push(snapshot)
+      }
+      return list
+    }
+
     var EMPTY_CONFIG = Object.freeze({
       root: '',
       directory: '',
@@ -777,7 +860,7 @@ window.__ModuleLoader__.load({
           }
           pushRepo(repos, byRepo, repoRoot, records)
         }
-        return { repos: repos, config: config }
+        return { repos: repos, config: config, snapshots: normalizeSnapshots(value) }
       }
       var rawRecords = value && Array.isArray(value.records) ? value.records : Array.isArray(value) ? value : []
       for (var flatIndex = 0; flatIndex < rawRecords.length; flatIndex += 1) {
@@ -787,7 +870,17 @@ window.__ModuleLoader__.load({
         if (!byRepo[key]) pushRepo(repos, byRepo, key, [])
         byRepo[key].records.push(flat)
       }
-      return { repos: repos, config: config }
+      return { repos: repos, config: config, snapshots: normalizeSnapshots(value) }
+    }
+
+    function normalizeSnapshots(value) {
+      var raw = value && Array.isArray(value.snapshots) ? value.snapshots : []
+      var snapshots = []
+      for (var index = 0; index < raw.length; index += 1) {
+        var snapshot = normalizeSnapshot(raw[index])
+        if (snapshot) snapshots.push(snapshot)
+      }
+      return snapshots
     }
 
     function pushRepo(repos, byRepo, repoRoot, records) {
@@ -1394,7 +1487,7 @@ window.__ModuleLoader__.load({
 
     /** Read the `list` endpoint; refresh through the returned revision bump. */
     function useWorktreeList(apiRef) {
-      var pair = React.useState({ phase: 'loading', repos: [], config: EMPTY_CONFIG, error: null })
+      var pair = React.useState({ phase: 'loading', repos: [], snapshots: [], config: EMPTY_CONFIG, error: null })
       var state = pair[0]
       var setState = pair[1]
       var revisionPair = React.useState(0)
@@ -1409,6 +1502,7 @@ window.__ModuleLoader__.load({
             return {
               phase: previous && previous.repos && previous.repos.length > 0 ? 'refreshing' : 'loading',
               repos: previous ? previous.repos : [],
+              snapshots: previous && previous.snapshots ? previous.snapshots : [],
               config: previous ? previous.config : EMPTY_CONFIG,
               error: null,
             }
@@ -1426,12 +1520,12 @@ window.__ModuleLoader__.load({
             function (value) {
               if (!alive) return
               var normalized = normalizeList(value)
-              setState({ phase: 'ready', repos: normalized.repos, config: normalized.config, error: null })
+              setState({ phase: 'ready', repos: normalized.repos, snapshots: normalized.snapshots, config: normalized.config, error: null })
             },
             function (error) {
               if (!alive) return
               if (controller && controller.signal && controller.signal.aborted) return
-              setState({ phase: 'error', repos: [], config: EMPTY_CONFIG, error: toError(error) })
+              setState({ phase: 'error', repos: [], snapshots: [], config: EMPTY_CONFIG, error: toError(error) })
             },
           )
           return function () {
@@ -1563,6 +1657,13 @@ window.__ModuleLoader__.load({
       '  .daw-badge-ok { border-color: color-mix(in srgb, var(--daw-success) 40%, var(--daw-line)); color: var(--daw-success); }',
       '  .daw-conversations { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }',
       '  .daw-link { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--daw-brand); font: inherit; font-size: 12px; text-align: left; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; }',
+      '  .daw-snapshots { padding: 8px 12px 10px; border-top: 1px dashed var(--daw-line); background: var(--daw-soft); }',
+      '  .daw-snapshots-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }',
+      '  .daw-snapshots-title { margin: 0; color: var(--daw-secondary); font-size: 12px; font-weight: 500; }',
+      '  .daw-snapshot { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; border-top: 1px solid var(--daw-line); }',
+      '  .daw-snapshot:first-of-type { border-top: 0; }',
+      '  .daw-snapshot-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }',
+      '  .daw-snapshot-sha { color: var(--daw-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }',
       '  .daw-empty { margin-top: 16px; padding: 20px; border: 1px dashed var(--daw-line); border-radius: 12px; text-align: center; color: var(--daw-secondary); }',
       '  .daw-empty-hint { margin-top: 4px; color: var(--daw-muted); font-size: 12px; line-height: 18px; }',
       '  .daw-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }',
@@ -1866,6 +1967,9 @@ window.__ModuleLoader__.load({
       var dirtyPair = React.useState(false)
       var dirtyBlocked = dirtyPair[0]
       var setDirtyBlocked = dirtyPair[1]
+      var inUsePair = React.useState(false)
+      var inUseBlocked = inUsePair[0]
+      var setInUseBlocked = inUsePair[1]
 
       var managed = projectionTone(projection) === 'managed' || !!(details && details.managed === true)
       var disabled = busy !== ''
@@ -1903,11 +2007,19 @@ window.__ModuleLoader__.load({
             setBusy('')
             setConfirming(false)
             setDirtyBlocked(false)
+            setInUseBlocked(false)
+            setActionError('')
             setNotice(t('popover.clean.success', { path: targetPath || t('popover.none') }))
             onRefresh()
           },
           function (error) {
             setBusy('')
+            if (force !== true && isWorktreeInUseError(error)) {
+              setDirtyBlocked(false)
+              setInUseBlocked(true)
+              setActionError('')
+              return
+            }
             if (force !== true && isDirtyError(error)) setDirtyBlocked(true)
             fail(error)
           },
@@ -1958,13 +2070,24 @@ window.__ModuleLoader__.load({
                       busy === 'clean' ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
                       t('popover.clean.confirmAction'),
                     ),
-                    h('button', { type: 'button', className: 'daw-button daw-button-ghost', disabled: disabled, onClick: function () { setConfirming(false); setDirtyBlocked(false); setActionError('') } }, t('popover.clean.cancel')),
+                    h('button', { type: 'button', className: 'daw-button daw-button-ghost', disabled: disabled, onClick: function () { setConfirming(false); setDirtyBlocked(false); setInUseBlocked(false); setActionError('') } }, t('popover.clean.cancel')),
                   ),
                 )
               : h('div', { className: 'daw-actions', style: { marginTop: 0 } },
-                  h('button', { type: 'button', className: 'daw-button', disabled: disabled || !sessionId, onClick: function () { setConfirming(true); setActionError(''); setNotice('') } }, t('popover.clean.action')),
+                  h('button', { type: 'button', className: 'daw-button', disabled: disabled || !sessionId, onClick: function () { setConfirming(true); setActionError(''); setNotice(''); setDirtyBlocked(false); setInUseBlocked(false) } }, t('popover.clean.action')),
                 ),
-            dirtyBlocked
+            inUseBlocked
+              ? h('div', null,
+                  h('p', { className: 'daw-note' }, t('error.worktreeInUse')),
+                  h('div', { className: 'daw-actions' },
+                    h('button', { type: 'button', className: 'daw-button daw-button-danger', disabled: disabled, 'data-action': 'force-clean', onClick: function () { runClean(true) } },
+                      busy === 'force' ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
+                      t('error.forceCleanupAction'),
+                    ),
+                    h('button', { type: 'button', className: 'daw-button daw-button-ghost', disabled: disabled, onClick: function () { setInUseBlocked(false); setActionError('') } }, t('popover.clean.cancel')),
+                  ),
+                )
+              : dirtyBlocked
               ? h('div', null,
                   h('p', { className: 'daw-note' }, t('popover.clean.forceHint')),
                   h('div', { className: 'daw-actions' },
@@ -3008,6 +3131,9 @@ window.__ModuleLoader__.load({
       var forcePair = React.useState('')
       var forceKey = forcePair[0]
       var setForceKey = forcePair[1]
+      var inUsePair = React.useState('')
+      var inUseKey = inUsePair[0]
+      var setInUseKey = inUsePair[1]
       var errorPair = React.useState(null)
       var rowError = errorPair[0]
       var setRowError = errorPair[1]
@@ -3092,6 +3218,7 @@ window.__ModuleLoader__.load({
           return
         }
         setBusy('delete:' + key)
+        setInUseKey('')
         clearMessages()
         var pending
         try {
@@ -3104,17 +3231,55 @@ window.__ModuleLoader__.load({
             setBusy('')
             setConfirmKey('')
             setForceKey('')
+            setInUseKey('')
             setNotice(t('settings.deleted', { path: record.path || record.repoRoot || '' }))
             refresh()
           },
           function (error) {
             setBusy('')
+            if (force !== true && isWorktreeInUseError(error)) {
+              setForceKey('')
+              setInUseKey(key)
+              setRowError(null)
+              return
+            }
             if (force !== true && isDirtyError(error)) {
               setForceKey(key)
               fail(key, t('settings.delete.forceHint'))
               return
             }
             fail(key, t('settings.rowError', { message: messageOf(error) }))
+          },
+        )
+      }
+
+      /** Restore one recoverable snapshot; then refresh the list and report the path. */
+      function runRestore(snapshot) {
+        if (busy) return
+        var api = apiRef.current
+        var key = 'restore:' + snapshot.ref
+        if (!api || typeof api.restore !== 'function') {
+          fail(key, t('settings.rpcUnavailable'))
+          return
+        }
+        setBusy('restore:' + snapshot.ref)
+        clearMessages()
+        var pending
+        try {
+          pending = api.restore(snapshot.ref)
+        } catch (error) {
+          pending = Promise.reject(error)
+        }
+        Promise.resolve(pending).then(
+          function (value) {
+            setBusy('')
+            var restoredPath = (value && typeof value.path === 'string' && value.path) || snapshot.path || snapshot.restoredPath || ''
+            setNotice(t('settings.snapshots.restored', { path: restoredPath || t('settings.unknown') }))
+            refresh()
+          },
+          function (error) {
+            setBusy('')
+            fail(key, t('settings.snapshots.restoreFailed', { message: messageOf(error) }))
           },
         )
       }
@@ -3183,6 +3348,7 @@ window.__ModuleLoader__.load({
             const key = recordKey(record, recordIndex) + '@' + repoLabel
             const isConfirming = confirmKey === key
             const isForcing = forceKey === key
+            const isInUse = inUseKey === key
             const isBusy = busy === 'delete:' + key
             const isDetached = record.mode === DETACHED_MODE || (!record.mode && !record.branch)
             const modeText = isDetached
@@ -3236,7 +3402,24 @@ window.__ModuleLoader__.load({
                         'div',
                         { className: 'daw-confirm' },
                         h('p', { className: 'daw-note', style: { marginTop: 0 } }, t('settings.delete.confirm')),
-                        isForcing
+                        isInUse
+                          ? h(
+                              'div',
+                              null,
+                              h('p', { className: 'daw-note' }, t('error.worktreeInUse')),
+                              h(
+                                'div',
+                                { className: 'daw-actions' },
+                                h(
+                                  'button',
+                                  { type: 'button', className: 'daw-button daw-button-danger', disabled: busy !== '', 'data-action': 'force-delete', onClick: function () { runDelete(record, key, true) } },
+                                  isBusy ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
+                                  t('error.forceCleanupAction'),
+                                ),
+                                h('button', { type: 'button', className: 'daw-button daw-button-ghost', disabled: busy !== '', onClick: function () { setConfirmKey(''); setForceKey(''); setInUseKey('') } }, t('settings.cancel')),
+                              ),
+                            )
+                          : isForcing
                           ? h(
                               'div',
                               null,
@@ -3281,6 +3464,7 @@ window.__ModuleLoader__.load({
                       onClick: function () {
                         setConfirmKey(key)
                         setForceKey('')
+                        setInUseKey('')
                         clearMessages()
                       },
                     },
@@ -3319,7 +3503,75 @@ window.__ModuleLoader__.load({
                   loading ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : iconRefresh(13),
                 ),
               ),
-              expanded ? h('div', { className: 'daw-wt-list' }, rows.length > 0 ? rows : h('p', { className: 'daw-note' }, t('settings.empty'))) : null,
+              expanded
+                ? h(
+                    React.Fragment,
+                    null,
+                    h('div', { className: 'daw-wt-list' }, rows.length > 0 ? rows : h('p', { className: 'daw-note' }, t('settings.empty'))),
+                    (function () {
+                      var repoSnapshots = snapshotsForRepo(state.snapshots, group.repoRoot)
+                      if (repoSnapshots.length === 0) return null
+                      var snapshotRows = []
+                      for (let snapshotIndex = 0; snapshotIndex < repoSnapshots.length; snapshotIndex += 1) {
+                        const snapshot = repoSnapshots[snapshotIndex]
+                        const restoreKey = 'restore:' + snapshot.ref
+                        const isRestoring = busy === restoreKey
+                        const snapshotCreated = snapshot.createdAt !== undefined && snapshot.createdAt !== null ? formatDate(snapshot.createdAt, language) : ''
+                        const snapshotRestored = snapshot.restoredAt !== undefined && snapshot.restoredAt !== null ? formatDate(snapshot.restoredAt, language) : ''
+                        snapshotRows.push(
+                          h(
+                            'div',
+                            { className: 'daw-snapshot', key: snapshot.ref, 'data-snapshot-ref': snapshot.ref },
+                            h(
+                              'div',
+                              { className: 'daw-snapshot-main' },
+                              h('code', { className: 'daw-code daw-snapshot-ref', title: snapshot.ref }, shortSnapshotRef(snapshot.ref)),
+                              snapshot.commit ? h('span', { className: 'daw-snapshot-sha', title: snapshot.commit }, shortCommit(snapshot.commit)) : null,
+                              snapshotCreated ? h('span', { className: 'daw-meta' }, t('settings.snapshots.created', { time: snapshotCreated })) : null,
+                              snapshot.restoredAt
+                                ? h('span', { className: 'daw-badge daw-badge-ok' }, t('settings.snapshots.restoreBadge'))
+                                : null,
+                              snapshotRestored ? h('span', { className: 'daw-meta' }, t('settings.snapshots.restoredAt', { time: snapshotRestored })) : null,
+                              snapshot.restoredPath ? h('code', { className: 'daw-code', title: snapshot.restoredPath }, snapshot.restoredPath) : null,
+                            ),
+                            h(
+                              'div',
+                              { className: 'daw-wt-actions' },
+                              h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  className: 'daw-button',
+                                  disabled: busy !== '',
+                                  'data-action': 'restore',
+                                  'data-snapshot-ref': snapshot.ref,
+                                  title: t('settings.snapshots.restore'),
+                                  onClick: function () {
+                                    runRestore(snapshot)
+                                  },
+                                },
+                                isRestoring ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
+                                isRestoring ? t('settings.snapshots.restoring') : t('settings.snapshots.restore'),
+                              ),
+                            ),
+                            rowError && rowError.key === restoreKey ? h('div', { className: 'daw-error', role: 'alert' }, rowError.message) : null,
+                          ),
+                        )
+                      }
+                      return h(
+                        'div',
+                        { className: 'daw-snapshots', 'data-dsh-codex-worktree-snapshots': group.repoRoot || '' },
+                        h(
+                          'div',
+                          { className: 'daw-snapshots-head' },
+                          h('h4', { className: 'daw-snapshots-title' }, t('settings.snapshots.title')),
+                          h('span', { className: 'daw-meta' }, t('settings.snapshots.count', { count: String(repoSnapshots.length) })),
+                        ),
+                        snapshotRows,
+                      )
+                    })(),
+                  )
+                : null,
             ),
           )
         }

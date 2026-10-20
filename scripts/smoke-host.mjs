@@ -231,6 +231,7 @@ export default z
     },
     agents: {
       roots: () => [...roots],
+      list: () => [...roots],
       get: (id) => roots.find((agent) => agent.session?.id === id),
     },
     workingDirectory: {
@@ -294,13 +295,13 @@ export default z
   check('agent/created listener registered', captured.listeners.has('agent/created'))
   check('volatile-update listener registered', captured.listeners.has('loader/volatile-update'))
   check('no model tool is registered', captured.tools.length === 0, String(captured.tools.length))
-  check('2 slash commands registered', captured.commands.length === 2, String(captured.commands.length))
+  check('4 slash commands registered', captured.commands.length === 4, String(captured.commands.length))
   check('codexWorktree projection registered', captured.projection?.key === 'codexWorktree', String(captured.projection?.key))
   check('projection is client-visible (wire block)', captured.projection?.wire?.viewSchema !== undefined)
   check('official auto settings form advertised', captured.settingsConfigure?.presentation?.auto === true)
   // The routes are the RPC surface of lib/constants.js. `create` and `cancel` are
   // deliberately absent: creation happens in agent/created, cancel is client-only.
-  const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'placement', 'settings']
+  const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'placement', 'settings', 'restore']
   check(
     `${expectedEndpoints.length} routes registered`,
     captured.routes.length === expectedEndpoints.length,
@@ -405,7 +406,7 @@ export default z
   // ---- 5b. Settings bridge ------------------------------------------------
   const settingsGet = await call('settings', { action: 'get' })
   check('settings get answers this plugin namespace', settingsGet?.ok === true && settingsGet.value.ns === 'codex-worktree', JSON.stringify(settingsGet).slice(0, 300))
-  check('settings get returns 20 editable fields', settingsGet?.value?.fields?.length === 20, String(settingsGet?.value?.fields?.length))
+  check('settings get returns 21 editable fields', settingsGet?.value?.fields?.length === 21, String(settingsGet?.value?.fields?.length))
   check('settings get returns defaults', settingsGet?.value?.defaults?.defaultPlacement === 'worktree')
   check('settings get hides internal fields', !('gitCommand' in settingsGet.value.values))
   const settingsSet = await call('settings', { action: 'set', patch: { enabled: false }, revision: settingsGet.value.revision })
@@ -434,11 +435,41 @@ export default z
   check('commits land on the detached HEAD', detachedHead.length === 40, detachedHead)
   check('plugin created no branch', git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads']).split('\n').filter((line) => line.length > 0).length === 1, git(repo, ['branch']))
 
-  // The sidecar v2 keeps records and placements side by side.
-  const sidecar = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
-  check('sidecar is schema v2', sidecar.schemaVersion === 2, String(sidecar.schemaVersion))
-  check('sidecar keeps the session record', sidecar.records['session-smoke']?.path === cwd)
-  check('sidecar keeps the workspace placement', Object.values(sidecar.placements)[0]?.mode === 'local', JSON.stringify(sidecar.placements))
+  // ---- 7. Removal is guarded, snapshotted and restorable -----------------
+  const before = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
+  check('sidecar is schema v3', before.schemaVersion === 3, String(before.schemaVersion))
+  check('sidecar keeps the session record', before.records['session-smoke']?.path === cwd)
+  check('sidecar keeps the workspace placement', Object.values(before.placements)[0]?.mode === 'local', JSON.stringify(before.placements))
+  check('sidecar starts without snapshots', Object.keys(before.snapshots ?? {}).length === 0, JSON.stringify(before.snapshots))
+
+  const inUse = await call('clean', { sessionId: 'session-smoke' })
+  check('clean refuses a checkout in use by a live session', inUse?.error?.code === 'worktree-in-use', JSON.stringify(inUse).slice(0, 300))
+  const cleaned = await call('clean', { sessionId: 'session-smoke', force: true })
+  check('forced clean removes the checkout', cleaned?.ok === true && cleaned.value.removed === true, JSON.stringify(cleaned).slice(0, 300))
+  check('forced clean saved the detached commits as a snapshot', cleaned?.value?.snapshots?.length === 1, JSON.stringify(cleaned?.value?.snapshots))
+  const snapshot = cleaned.value.snapshots[0]
+  check('snapshot ref lives under refs/dsh-codex-worktree', String(snapshot.ref).startsWith('refs/dsh-codex-worktree/'), String(snapshot.ref))
+  check('snapshot points at the detached HEAD', snapshot.commit === detachedHead, `${snapshot.commit} !== ${detachedHead}`)
+
+  const listAfter = await call('list', {})
+  check('list exposes the saved snapshot', listAfter?.value?.snapshots?.length === 1, JSON.stringify(listAfter?.value?.snapshots))
+  const realRepo = await realpath(repo)
+  check(
+    'list keeps a snapshot-only repository visible',
+    listAfter?.value?.repos?.some((group) => group.repoRoot === realRepo && group.records.length === 0),
+    JSON.stringify(listAfter?.value?.repos),
+  )
+
+  const restored = await call('restore', { ref: snapshot.ref })
+  check('restore recreates a checkout from the snapshot', restored?.ok === true && typeof restored.value.path === 'string', JSON.stringify(restored).slice(0, 300))
+  check('restored checkout is on the saved commit', git(restored.value.path, ['rev-parse', 'HEAD']) === detachedHead)
+  check('restored checkout carries the committed file', (await readFile(join(restored.value.path, 'b.txt'), 'utf8')).trim() === 'b')
+  const missing = await call('restore', { ref: 'refs/dsh-codex-worktree/missing' })
+  check('unknown snapshot maps to snapshot-not-found', missing?.error?.code === 'snapshot-not-found', JSON.stringify(missing).slice(0, 300))
+
+  const after = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
+  check('sidecar records the snapshot after the clean', after.snapshots?.[snapshot.ref]?.commit === detachedHead, JSON.stringify(after.snapshots))
+  check('sidecar marks the snapshot as restored', typeof after.snapshots?.[snapshot.ref]?.restoredPath === 'string', JSON.stringify(after.snapshots))
 } finally {
   await rm(workspace, { recursive: true, force: true })
 }
