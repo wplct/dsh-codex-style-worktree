@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
 
 const here = new URL('..', import.meta.url).pathname
-const workspace = await mkdtemp(join(tmpdir(), 'dsh-auto-worktree-smoke-'))
+const workspace = await mkdtemp(join(tmpdir(), 'dsh-codex-worktree-smoke-'))
 const pluginDir = join(workspace, 'plugin')
 const stubs = join(workspace, 'node_modules', '@deepseek-ai')
 
@@ -189,7 +189,7 @@ export default z
   await mkdir(dshHome, { recursive: true })
   process.env.DSH_HOME = dshHome
   const mod = await import(pathToFileURL(join(pluginDir, 'lib', 'index.js')).href)
-  check('module exports name', mod.name === 'dsh-auto-worktree', String(mod.name))
+  check('module exports name', mod.name === 'dsh-codex-worktree', String(mod.name))
   check('module exports apply', typeof mod.apply === 'function')
   check('module exports Config', mod.Config !== undefined)
   check('module exports required injects', Array.isArray(mod.inject) && mod.inject.includes('agents'))
@@ -197,11 +197,20 @@ export default z
   check('agent/created listener registered', captured.listeners.has('agent/created'))
   check('no model tool is registered', captured.tools.length === 0, String(captured.tools.length))
   check('2 slash commands registered', captured.commands.length === 2, String(captured.commands.length))
-  check('4 routes registered', captured.routes.length === 4, String(captured.routes.length))
+  // The routes are the RPC surface of lib/constants.js: `create` is the manual
+  // creation used by the "New Worktree" button in the new-session composer.
+  const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'create']
   check(
-    'list route path registered',
-    captured.routes.some((route) => route.path === '/api/dsh-auto-worktree/list'),
+    `${expectedEndpoints.length} routes registered`,
+    captured.routes.length === expectedEndpoints.length,
+    String(captured.routes.length),
   )
+  for (const endpoint of expectedEndpoints) {
+    check(
+      `${endpoint} route path registered`,
+      captured.routes.some((route) => route.path === `/api/dsh-codex-worktree/${endpoint}`),
+    )
+  }
 
   // ---- 4. Drive one agent through the real lifecycle ---------------------
   const agent = { id: 'session-smoke', session: { id: 'session-smoke', header: { cwd: repo }, append: () => undefined }, inject: () => undefined }
@@ -217,15 +226,37 @@ export default z
   check('main checkout stays clean', git(repo, ['status', '--porcelain']) === '')
 
   // ---- 5. Drive the client route through the envelope --------------------
-  const listRoute = captured.routes.find((route) => route.path === '/api/dsh-auto-worktree/list')
+  const listRoute = captured.routes.find((route) => route.path === '/api/dsh-codex-worktree/list')
   const response = await listRoute.fetch({
     headers: { get: () => 'application/json' },
-    json: async () => ({ rpcId: 'rpc-1', method: 'dsh-auto-worktree/list', payload: {} }),
+    json: async () => ({ rpcId: 'rpc-1', method: 'dsh-codex-worktree/list', payload: {} }),
   })
   const body = await response.json()
   check('list route answers the rpc envelope', body.type === 'server-response' && body.rpcId === 'rpc-1')
   check('list route reports the repository group', body.result?.ok === true && body.result.value.repos.length === 1, JSON.stringify(body).slice(0, 300))
   check('list route exposes config', body.result?.value?.config?.autoPruneKeep === 15, JSON.stringify(body.result?.value?.config))
+
+  // ---- 5b. Manual creation used by the new-session composer button -------
+  const createRoute = captured.routes.find((route) => route.path === '/api/dsh-codex-worktree/create')
+  const createResponse = await createRoute.fetch({
+    headers: { get: () => 'application/json' },
+    json: async () => ({ rpcId: 'rpc-2', method: 'dsh-codex-worktree/create', payload: { path: repo } }),
+  })
+  const created = (await createResponse.json()).result
+  check('create route answers the rpc envelope', created?.ok === true, JSON.stringify(created).slice(0, 300))
+  const createdPath = created?.value?.path
+  check(
+    'create route reports a checkout inside the pool',
+    typeof createdPath === 'string' && (await realpath(createdPath)).startsWith(expectedPool),
+    String(createdPath),
+  )
+  let createdRepo = null
+  try {
+    createdRepo = await realpath(created?.value?.repoRoot ?? '/nonexistent')
+  } catch {
+    createdRepo = null
+  }
+  check('create route maps the repository root', createdRepo === (await realpath(repo)), String(created?.value?.repoRoot))
 
   // ---- 6. The checkout stays detached; Git owns branch naming ------------
   check('checkout is detached', (() => {

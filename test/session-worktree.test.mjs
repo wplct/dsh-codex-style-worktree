@@ -143,7 +143,7 @@ test('non-git directories, missing commits, child agents, markers and switches s
     const env = await setup()
     const agent = createAgent(env.repo)
     env.roots.push(agent)
-    await writeFile(join(env.repo, '.dsh-auto-worktree-off'), '', 'utf8')
+    await writeFile(join(env.repo, '.dsh-codex-worktree-off'), '', 'utf8')
     assert.equal((await detach(env, agent)).reason, 'marker')
   }
   {
@@ -255,7 +255,78 @@ test('pruning a detached checkout preserves its commits as a snapshot ref', asyn
   assert.equal(pruned.removed.length, 1, JSON.stringify(pruned))
   assert.equal(pruned.snapshots.length, 1, JSON.stringify(pruned))
   assert.equal(pruned.snapshots[0].commit, head)
-  const refs = git(env.repo, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/dsh-auto-worktree'])
+  const refs = git(env.repo, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/dsh-codex-worktree'])
   assert.match(refs, new RegExp(head))
   git(env.repo, ['update-ref', '-d', pruned.snapshots[0].ref])
+})
+
+test('the new-worktree button creates a checkout ahead of its session, which adopts it', async () => {
+  const env = await setup({ autoPrune: false })
+  const repo = await realpath(env.repo)
+
+  const record = await env.runtime.createCheckout({ repoPath: env.repo })
+  assert.equal(record.pending, true)
+  assert.match(record.sessionId, /^pending-/)
+  assert.equal(record.mode, 'detached')
+  assert.equal(record.branch, null)
+  assert.equal(await realpath(record.repoRoot), repo)
+  assert.equal(await realpath(record.path).then((p) => p.startsWith(join(repo, '.agents', 'worktrees'))), true)
+  assert.ok(existsSync(record.path), 'checkout directory exists')
+  assert.equal(await env.store.get(record.sessionId), record)
+
+  // The session that starts inside the checkout inherits the existing record.
+  const agent = createAgent(await realpath(record.path), 'session-button')
+  env.roots.push(agent)
+  const result = await detach(env, agent)
+  assert.equal(result.created, false)
+  assert.equal(result.reason, 'adopted')
+  assert.equal(result.record.sessionId, 'session-button')
+  assert.equal(result.record.pending, false)
+  assert.equal((await env.store.get('session-button'))?.path, record.path)
+  assert.equal(await env.store.get(record.sessionId), null)
+})
+
+test('createCheckout reports the failure reasons the button renders', async () => {
+  {
+    const env = await setup()
+    const outside = await makeTempDir()
+    await assert.rejects(
+      () => env.runtime.createCheckout({ repoPath: outside }),
+      (error) => error.code === 'not-git-repository',
+    )
+  }
+  {
+    const env = await setup({ enabled: false })
+    await assert.rejects(
+      () => env.runtime.createCheckout({ repoPath: env.repo }),
+      (error) => error.code === 'disabled',
+    )
+  }
+  {
+    const env = await setup()
+    const repo = await makeRepo()
+    await rm(join(repo, '.git'), { recursive: true, force: true })
+    git(repo, ['init', '-q', '-b', 'main'])
+    await assert.rejects(
+      () => env.runtime.createCheckout({ repoPath: repo }),
+      (error) => error.code === 'no-commit',
+    )
+  }
+  {
+    const env = await setup({ maxPerRepo: 1 })
+    await env.runtime.createCheckout({ repoPath: env.repo })
+    await assert.rejects(
+      () => env.runtime.createCheckout({ repoPath: env.repo }),
+      (error) => error.code === 'limit-reached',
+    )
+  }
+})
+
+test('createCheckout respects the per-repository disable marker', async () => {
+  const env = await setup()
+  await writeFile(join(env.repo, '.dsh-codex-worktree-off'), '', 'utf8')
+  await assert.rejects(
+    () => env.runtime.createCheckout({ repoPath: env.repo }),
+    (error) => error.code === 'disabled',
+  )
 })

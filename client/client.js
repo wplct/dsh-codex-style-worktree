@@ -1,22 +1,25 @@
 /**
- * dsh-auto-worktree — browser half (DSH Web GUI).
+ * dsh-codex-worktree — browser half (DSH Web GUI). Display title:
+ * "Codex 风格 Worktree" / "Codex-style Worktree".
  *
- * Registers two surfaces:
+ * Registers three surfaces:
  *   1. `conversation.session.header.utilities` — a chip for the current Session's
  *      automatically created Git worktree (`wt:<name>` / branch), with a popover
- *      that shows the worktree facts and offers "name branch" and "clean up".
- *   2. `settings.section` — a management page listing every recorded worktree with
- *      refresh and per-row cleanup.
+ *      that shows the worktree facts and offers "clean up".
+ *   2. `conversation.input.dock` — a "新建 Worktree / New worktree" button above the
+ *      composer for a blank Session whose Workspace is not itself a worktree.
+ *   3. `settings.section` — a management page listing every recorded worktree with
+ *      refresh, prune and per-row actions.
  *
  * The browser artifact is a lazy factory whose id equals the package name
- * (`dsh-auto-worktree`). React comes from the browser module table, so `react` is
+ * (`dsh-codex-worktree`). React comes from the browser module table, so `react` is
  * the only module this file may require.
  *
  * No build step: plain CommonJS-shaped source using React.createElement.
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-auto-worktree',
+  id: 'dsh-codex-worktree',
   factory: function (require) {
     'use strict'
 
@@ -31,46 +34,47 @@ window.__ModuleLoader__.load({
      * ================================================================== */
 
     /** Loader id / plugin name; must match the `insert.id`/`name` row of cordis.patch.yml. */
-    var PLUGIN_NAME = 'dsh-auto-worktree'
+    var PLUGIN_NAME = 'dsh-codex-worktree'
     /** Locale namespace owned by the client half. */
-    var LOCALE_NS = 'dsh-auto-worktree'
+    var LOCALE_NS = 'dsh-codex-worktree'
     /** Base path of the authenticated host route carrier. */
-    var API_PREFIX = '/api/dsh-auto-worktree'
+    var API_PREFIX = '/api/dsh-codex-worktree'
     /** RPC method prefix the connection layer derives from API_PREFIX. */
-    var RPC_NAMESPACE = 'dsh-auto-worktree'
+    var RPC_NAMESPACE = 'dsh-codex-worktree'
     /**
      * RPC endpoints registered by the host half.
      *
-     * `status`/`name`/`clean`/`list` are frozen in lib/constants.js; `prune` is the
-     * management-page extension the host half adds on top of them.
+     * `status`/`clean`/`list`/`prune` drive the Session chip and the management page;
+     * `create` backs the composer dock button.
      */
-    var ENDPOINTS = ['status', 'clean', 'list', 'prune']
+    var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'create']
 
     /**
      * `connection.rpc.call(channel, endpoint, payload, signal)` is the DSH wire
      * surface: the channel is one path segment (`/api`) and the endpoint is
      * `<namespace>/<key>` (its segments are validated individually). Together they
      * address `${API_PREFIX}/${key}` and produce `message.method ===
-     * 'dsh-auto-worktree/'+key`, which is exactly the host-side contract.
+     * 'dsh-codex-worktree/'+key`, which is exactly the host-side contract.
      */
     var RPC_CHANNEL = '/' + String(API_PREFIX).split('/')[1]
 
     /** Attribute guarding the single injected <style> element. */
-    var STYLE_ATTR = 'data-dsh-auto-worktree-style'
-    var CHIP_ID = 'dsh-auto-worktree-chip'
-    var SECTION_ID = 'dsh-auto-worktree'
+    var STYLE_ATTR = 'data-dsh-codex-worktree-style'
+    var CHIP_ID = 'dsh-codex-worktree-chip'
+    var SECTION_ID = 'dsh-codex-worktree'
+    var DOCK_ID = 'dsh-codex-worktree-new'
 
     /* ================================================================== *
      * 2. Locale                                                           *
      * ================================================================== */
 
     var DICT_EN = {
-      'chip.title': 'Automatic worktree',
+      'chip.title': 'Codex-style Worktree',
       'chip.unmanaged': 'No worktree',
       'chip.loading': 'Checking\u2026',
       'chip.error': 'Status unknown',
       'chip.show': 'Show worktree details',
-      'popover.title': 'Automatic worktree',
+      'popover.title': 'Codex-style Worktree',
       'popover.close': 'Close',
       'popover.refresh': 'Refresh',
       'popover.path': 'Path',
@@ -93,8 +97,8 @@ window.__ModuleLoader__.load({
       'popover.clean.deleteBranch': 'Also delete the branch',
       'popover.clean.success': 'Cleaned up {path}',
       'popover.error': 'Operation failed: {message}',
-      'settings.title': 'Worktrees',
-      'settings.subtitle': 'Automatic worktrees created for DSH Sessions on this machine.',
+      'settings.title': 'Codex-style Worktree',
+      'settings.subtitle': 'Codex-style worktrees created for DSH Sessions on this machine.',
       'settings.refresh': 'Refresh',
       'settings.loading': 'Loading\u2026',
       'settings.retry': 'Retry',
@@ -145,15 +149,23 @@ window.__ModuleLoader__.load({
       'settings.openFailed': 'Could not open the conversation: {message}',
       'settings.controllersUnavailable': 'This Client does not expose the Workspace/Session controllers.',
       'settings.rpcUnavailable': 'The host RPC connection is unavailable.',
+      'dock.new': 'New worktree',
+      'dock.new.busy': 'Creating\u2026',
+      'dock.new.show': 'Create a Codex-style worktree and open a new Session in it',
+      'dock.error.notGit': 'Not a Git repository',
+      'dock.error.noCommit': 'Repository has no commits',
+      'dock.error.disabled': 'Worktree disabled for this repository',
+      'dock.error.limitReached': 'Worktree limit reached',
+      'dock.error.noWorkspace': 'Could not find the Workspace of this Session.',
     }
 
     var DICT_ZH = {
-      'chip.title': '\u81ea\u52a8 Worktree',
+      'chip.title': 'Codex \u98ce\u683c Worktree',
       'chip.unmanaged': '\u672a\u6258\u7ba1',
       'chip.loading': '\u68c0\u67e5\u4e2d\u2026',
       'chip.error': '\u72b6\u6001\u672a\u77e5',
       'chip.show': '\u67e5\u770b Worktree \u8be6\u60c5',
-      'popover.title': '\u81ea\u52a8 Worktree',
+      'popover.title': 'Codex \u98ce\u683c Worktree',
       'popover.close': '\u5173\u95ed',
       'popover.refresh': '\u5237\u65b0',
       'popover.path': '\u8def\u5f84',
@@ -176,8 +188,8 @@ window.__ModuleLoader__.load({
       'popover.clean.deleteBranch': '\u540c\u65f6\u5220\u9664\u5206\u652f',
       'popover.clean.success': '\u5df2\u6e05\u7406 {path}',
       'popover.error': '\u64cd\u4f5c\u5931\u8d25\uff1a{message}',
-      'settings.title': '\u5de5\u4f5c\u6811',
-      'settings.subtitle': '\u672c\u673a\u4e0a\u4e3a DSH \u4f1a\u8bdd\u81ea\u52a8\u521b\u5efa\u7684\u5de5\u4f5c\u6811\u3002',
+      'settings.title': 'Codex \u98ce\u683c Worktree',
+      'settings.subtitle': '\u672c\u673a\u4e0a\u4e3a DSH \u4f1a\u8bdd\u81ea\u52a8\u521b\u5efa\u7684 Codex \u98ce\u683c Worktree\u3002',
       'settings.refresh': '\u5237\u65b0',
       'settings.loading': '\u52a0\u8f7d\u4e2d\u2026',
       'settings.retry': '\u91cd\u8bd5',
@@ -228,6 +240,14 @@ window.__ModuleLoader__.load({
       'settings.openFailed': '\u65e0\u6cd5\u6253\u5f00\u5bf9\u8bdd\uff1a{message}',
       'settings.controllersUnavailable': '\u5f53\u524d\u5ba2\u6237\u7aef\u672a\u63d0\u4f9b Workspace/Session \u63a7\u5236\u5668\u3002',
       'settings.rpcUnavailable': '\u4e3b\u673a RPC \u8fde\u63a5\u4e0d\u53ef\u7528\u3002',
+      'dock.new': '\u65b0\u5efa Worktree',
+      'dock.new.busy': '\u521b\u5efa\u4e2d\u2026',
+      'dock.new.show': '\u521b\u5efa\u4e00\u4e2a Codex \u98ce\u683c Worktree \u5e76\u5728\u5176\u4e2d\u6253\u5f00\u65b0\u4f1a\u8bdd',
+      'dock.error.notGit': '\u5f53\u524d\u5de5\u4f5c\u533a\u4e0d\u662f Git \u4ed3\u5e93',
+      'dock.error.noCommit': '\u4ed3\u5e93\u8fd8\u6ca1\u6709\u4efb\u4f55\u63d0\u4ea4',
+      'dock.error.disabled': '\u8be5\u4ed3\u5e93\u5df2\u5173\u95ed\u81ea\u52a8 Worktree',
+      'dock.error.limitReached': '\u5df2\u8fbe\u5230\u8be5\u4ed3\u5e93\u7684 Worktree \u4e0a\u9650',
+      'dock.error.noWorkspace': '\u672a\u627e\u5230\u5f53\u524d\u4f1a\u8bdd\u7684\u5de5\u4f5c\u533a\u3002',
     }
 
     /** Active locale service (or null when the service is unavailable). */
@@ -478,19 +498,19 @@ window.__ModuleLoader__.load({
 
     /**
      * Create the endpoint surface. Every call:
-     *   rpc.call('/api', 'dsh-auto-worktree/<key>', payload, signal)
+     *   rpc.call('/api', 'dsh-codex-worktree/<key>', payload, signal)
      * which is the wire form of `${API_PREFIX}/${key}` with `method` =
-     * `'dsh-auto-worktree/<key>'`.
+     * `'dsh-codex-worktree/<key>'`.
      */
     function createApi(ctx) {
       function invoke(key, payload, signal) {
         if (ENDPOINTS.indexOf(key) === -1) {
-          return Promise.reject(operationError('unknown-endpoint', 'dsh-auto-worktree: unknown endpoint ' + key))
+          return Promise.reject(operationError('unknown-endpoint', 'dsh-codex-worktree: unknown endpoint ' + key))
         }
         var connection = readConnection(ctx)
         var rpc = connection && connection.rpc
         if (!rpc || typeof rpc.call !== 'function') {
-          return Promise.reject(operationError('connection-unavailable', 'dsh-auto-worktree: connection.rpc.call is unavailable'))
+          return Promise.reject(operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'))
         }
         var method = RPC_NAMESPACE + '/' + key
         var pending
@@ -532,18 +552,26 @@ window.__ModuleLoader__.load({
           if (typeof repoRoot === 'string' && repoRoot) payload.repoRoot = repoRoot
           return invoke('prune', payload, signal)
         },
+        /**
+         * Create a worktree for one Workspace path (the composer dock button).
+         * Value: `{ path, repoRoot, baseCommit, repoLabel, mode, branch, createdAt }`.
+         */
+        createWorktree: function (input, signal) {
+          var workspacePath = input && typeof input.path === 'string' ? input.path : ''
+          return invoke('create', { path: workspacePath }, signal)
+        },
       }
     }
 
     function unwrapResult(key, result) {
       if (!result || typeof result !== 'object') {
-        throw operationError('invalid-response', 'dsh-auto-worktree/' + key + ': invalid RPC response')
+        throw operationError('invalid-response', 'dsh-codex-worktree/' + key + ': invalid RPC response')
       }
       if (result.ok === true) return result.value
       var wireError = result.error && typeof result.error === 'object' ? result.error : {}
       throw operationError(
         wireError.code === undefined ? 'rpc-failed' : wireError.code,
-        typeof wireError.message === 'string' && wireError.message ? wireError.message : 'dsh-auto-worktree/' + key + ' failed',
+        typeof wireError.message === 'string' && wireError.message ? wireError.message : 'dsh-codex-worktree/' + key + ' failed',
         wireError.details,
       )
     }
@@ -959,7 +987,7 @@ window.__ModuleLoader__.load({
             setState({
               phase: 'error',
               value: null,
-              error: operationError('connection-unavailable', 'dsh-auto-worktree: connection.rpc.call is unavailable'),
+              error: operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'),
             })
             return undefined
           }
@@ -1029,7 +1057,7 @@ window.__ModuleLoader__.load({
           var pending
           try {
             if (!api || typeof api.list !== 'function') {
-              throw operationError('connection-unavailable', 'dsh-auto-worktree: connection.rpc.call is unavailable')
+              throw operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable')
             }
             pending = api.list(undefined, controller ? controller.signal : undefined)
           } catch (error) {
@@ -1075,8 +1103,8 @@ window.__ModuleLoader__.load({
      * ================================================================== */
 
     var STYLE_TEXT = [
-      '@layer dsh-auto-worktree {',
-      '  .daw-chip-wrap, .daw-popover, .daw-settings {',
+      '@layer dsh-codex-worktree {',
+      '  .daw-chip-wrap, .daw-popover, .daw-settings, .daw-dock {',
       '    --daw-text: var(--dsw-alias-label-primary);',
       '    --daw-secondary: var(--dsw-alias-label-secondary);',
       '    --daw-muted: var(--dsw-alias-label-tertiary);',
@@ -1095,7 +1123,7 @@ window.__ModuleLoader__.load({
       '    font-size: 13px;',
       '    line-height: 20px;',
       '  }',
-      '  .daw-chip-wrap *, .daw-popover *, .daw-settings * { box-sizing: border-box; }',
+      '  .daw-chip-wrap *, .daw-popover *, .daw-settings *, .daw-dock * { box-sizing: border-box; }',
       '  .daw-chip-wrap { position: relative; display: inline-flex; align-items: center; }',
       '  .daw-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 220px; padding: 0 10px; border: 1px solid var(--daw-line); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }',
       '  .daw-chip:hover { background: var(--daw-hover); }',
@@ -1179,6 +1207,13 @@ window.__ModuleLoader__.load({
       '  .daw-empty { margin-top: 16px; padding: 20px; border: 1px dashed var(--daw-line); border-radius: 12px; text-align: center; color: var(--daw-secondary); }',
       '  .daw-empty-hint { margin-top: 4px; color: var(--daw-muted); font-size: 12px; line-height: 18px; }',
       '  .daw-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }',
+      '  .daw-dock { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 2px 4px; }',
+      '  .daw-dock-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px dashed var(--daw-line); border-radius: 8px; background: transparent; color: var(--daw-secondary); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }',
+      '  .daw-dock-button:hover:not(:disabled) { border-color: var(--daw-brand); background: var(--daw-hover); color: var(--daw-text); }',
+      '  .daw-dock-button:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
+      '  .daw-dock-button:disabled { opacity: .55; cursor: default; }',
+      '  .daw-dock-label { white-space: nowrap; }',
+      '  .daw-dock-error { color: var(--daw-danger); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }',
       '}',
     ].join('\n')
 
@@ -1280,7 +1315,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           className: 'daw-chip daw-chip-' + tone,
-          'data-dsh-auto-worktree-chip': CHIP_ID,
+          'data-dsh-codex-worktree-chip': CHIP_ID,
           'aria-haspopup': 'dialog',
           'aria-expanded': open ? 'true' : 'false',
           title: tooltip,
@@ -1313,7 +1348,7 @@ window.__ModuleLoader__.load({
 
     function ChipEntry(props) {
       return boundary(
-        h('span', { className: 'daw-chip daw-chip-error', title: 'dsh-auto-worktree' }, 'dsh-auto-worktree'),
+        h('span', { className: 'daw-chip daw-chip-error', title: 'dsh-codex-worktree' }, 'dsh-codex-worktree'),
         h(WorktreeChip, props),
       )
     }
@@ -1366,7 +1401,7 @@ window.__ModuleLoader__.load({
         if (disabled) return
         var api = apiRef.current
         if (!api || typeof api.clean !== 'function') {
-          fail(operationError('connection-unavailable', 'dsh-auto-worktree: connection.rpc.call is unavailable'))
+          fail(operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'))
           return
         }
         setBusy(force ? 'force' : 'clean')
@@ -1468,13 +1503,264 @@ window.__ModuleLoader__.load({
           className: 'daw-popover',
           role: 'dialog',
           'aria-label': t('popover.title'),
-          'data-dsh-auto-worktree-popover': '',
+          'data-dsh-codex-worktree-popover': '',
         },
         head,
         body,
         actionError ? h('div', { className: 'daw-error', role: 'alert' }, actionError) : null,
         notice ? h('div', { className: 'daw-notice', role: 'status' }, notice) : null,
       )
+    }
+
+    /* ================================================================== *
+     * 8b. Composer dock — "新建 Worktree" for a blank Session             *
+     * ================================================================== */
+
+    /** The worktree directory marker used to tell a main checkout from a worktree. */
+    var WORKTREE_DIR_SEGMENT = '/.agents/worktrees/'
+
+    function isWorktreePath(path) {
+      var normalized = String(path == null ? '' : path).replace(/\\/g, '/')
+      return normalized.indexOf(WORKTREE_DIR_SEGMENT) !== -1
+    }
+
+    function sessionIdOfSnapshot(session) {
+      if (!session || typeof session !== 'object') return ''
+      return firstString(session.sessionId, session.id)
+    }
+
+    /** Selector for the Workspace that owns this Session (the owner passes `useWorkspaces`). */
+    function selectWorkspaceForSession(session) {
+      var sessionId = sessionIdOfSnapshot(session)
+      return function (state) {
+        if (!sessionId || !state || !Array.isArray(state.items)) return undefined
+        for (var index = 0; index < state.items.length; index += 1) {
+          var workspace = state.items[index]
+          if (!workspace) continue
+          if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.indexOf(sessionId) !== -1) return workspace
+        }
+        return undefined
+      }
+    }
+
+    /**
+     * Resolve the Session's Workspace through the slot-provided selector hook. The
+     * fallback (no hook supplied, e.g. a direct component mount) reads the snapshot
+     * once without subscribing; the slot runtime always provides `useWorkspaces`.
+     */
+    function useSessionWorkspace(props, session) {
+      var useWorkspaces = props && typeof props.useWorkspaces === 'function' ? props.useWorkspaces : null
+      if (useWorkspaces) return useWorkspaces(selectWorkspaceForSession(session))
+      var service = readService(props && props.ctx, 'workspaces')
+      if (!service || !service.list || typeof service.list.getSnapshot !== 'function') return undefined
+      try {
+        return selectWorkspaceForSession(session)(service.list.getSnapshot())
+      } catch (error) {
+        return undefined
+      }
+    }
+
+    function iconWorktree(size) {
+      var dimension = size || 14
+      return h(
+        'svg',
+        {
+          width: dimension,
+          height: dimension,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+        h('circle', { cx: 18, cy: 6, r: 3 }),
+        h('circle', { cx: 6, cy: 18, r: 3 }),
+        h('path', { d: 'M18 9a9 9 0 0 1-9 9' }),
+      )
+    }
+
+    /** Map the host's `create` failure codes to friendly copy; otherwise keep the message. */
+    function describeCreateError(t, error) {
+      var code = String((error && error.code) || '')
+      if (code === 'not-git-repository') return t('dock.error.notGit')
+      if (code === 'no-commit') return t('dock.error.noCommit')
+      if (code === 'disabled') return t('dock.error.disabled')
+      if (code === 'limit-reached') return t('dock.error.limitReached')
+      return messageOf(error) || t('settings.rpcUnavailable')
+    }
+
+    /** Open the Session just created in the new Worktree's Workspace. */
+    function openCreatedSession(ctx, created, sessionId) {
+      var sessions = readService(ctx, 'sessions')
+      if (sessions && typeof sessions.open === 'function') {
+        sessions.open(typeof created === 'string' && created ? created : sessionId)
+        return
+      }
+      openSessionById(ctx, sessionId)
+    }
+
+    function WorktreeCreationDock(props) {
+      var t = useTranslator(props)
+      useLocaleVersion()
+      var apiRef = useStableRef(props.api)
+      var ctxRef = useStableRef(props.ctx)
+      var statePair = React.useState({ phase: 'idle', error: '' })
+      var state = statePair[0]
+      var setState = statePair[1]
+      var timerRef = React.useRef(null)
+      var abortRef = React.useRef(null)
+      var session = props && props.session && typeof props.session === 'object' ? props.session : null
+      var workspace = useSessionWorkspace(props, session)
+
+      React.useEffect(function () {
+        return function () {
+          if (timerRef.current && typeof clearTimeout === 'function') {
+            try {
+              clearTimeout(timerRef.current)
+            } catch (error) {
+              /* already fired */
+            }
+            timerRef.current = null
+          }
+          if (abortRef.current && typeof abortRef.current.abort === 'function') {
+            try {
+              abortRef.current.abort()
+            } catch (error) {
+              /* already aborted */
+            }
+            abortRef.current = null
+          }
+        }
+      }, [])
+
+      var workspacePath = workspace && typeof workspace.path === 'string' ? workspace.path : ''
+      var visible = !!(session && session.blank === true && workspacePath !== '' && !isWorktreePath(workspacePath))
+      if (!visible) return null
+
+      var creating = state.phase === 'creating'
+
+      function showError(message) {
+        setState({ phase: 'idle', error: message })
+        if (timerRef.current && typeof clearTimeout === 'function') {
+          try {
+            clearTimeout(timerRef.current)
+          } catch (error) {
+            /* already fired */
+          }
+          timerRef.current = null
+        }
+        if (typeof setTimeout === 'function') {
+          timerRef.current = setTimeout(function () {
+            timerRef.current = null
+            setState({ phase: 'idle', error: '' })
+          }, 8000)
+        }
+      }
+
+      function startCreate() {
+        if (creating) return
+        var api = apiRef.current
+        var ctx = ctxRef.current
+        var workspaces = readService(ctx, 'workspaces')
+        var sessions = readService(ctx, 'sessions')
+        if (!api || typeof api.createWorktree !== 'function') {
+          showError(t('settings.rpcUnavailable'))
+          return
+        }
+        if (!workspaces || typeof workspaces.create !== 'function' || !sessions || typeof sessions.create !== 'function') {
+          showError(t('settings.controllersUnavailable'))
+          return
+        }
+        if (!workspacePath) {
+          showError(t('dock.error.noWorkspace'))
+          return
+        }
+        if (timerRef.current && typeof clearTimeout === 'function') {
+          try {
+            clearTimeout(timerRef.current)
+          } catch (error) {
+            /* already fired */
+          }
+          timerRef.current = null
+        }
+        var controller = typeof AbortController === 'function' ? new AbortController() : null
+        abortRef.current = controller
+        setState({ phase: 'creating', error: '' })
+
+        var pending
+        try {
+          pending = api.createWorktree({ path: workspacePath }, controller ? controller.signal : undefined)
+        } catch (error) {
+          pending = Promise.reject(error)
+        }
+        Promise.resolve(pending)
+          .then(function (value) {
+            var createdWorktree = value && typeof value === 'object' ? value : {}
+            var worktreePath = firstString(createdWorktree.path)
+            if (!worktreePath) throw operationError('create-failed', 'create returned no worktree path')
+            var repoLabel = firstString(createdWorktree.repoLabel) || (createdWorktree.repoRoot ? baseName(createdWorktree.repoRoot) : '')
+            var title = (repoLabel || 'worktree') + '/' + (baseName(worktreePath) || 'worktree')
+            return Promise.resolve(workspaces.create({ path: worktreePath }))
+              .then(function (createdWorkspace) {
+                if (!createdWorkspace || !createdWorkspace.workspaceId) {
+                  throw operationError('workspace-unavailable', 'workspaces.create returned no workspaceId')
+                }
+                // Same sequence as the reference plugin: create → rename → create Session → open.
+                var rename =
+                  typeof workspaces.rename === 'function'
+                    ? Promise.resolve(workspaces.rename(createdWorkspace.workspaceId, title))
+                    : Promise.resolve()
+                return rename.then(function () {
+                  return createdWorkspace
+                })
+              })
+              .then(function (createdWorkspace) {
+                return Promise.resolve(sessions.create({ workspaceId: createdWorkspace.workspaceId })).then(function (createdSession) {
+                  var nextSessionId = sessionIdOf(createdSession) || sessionIdOfSnapshot(createdSession)
+                  if (!nextSessionId) throw operationError('session-unavailable', 'sessions.create returned no Session id')
+                  openCreatedSession(ctx, createdSession, nextSessionId)
+                })
+              })
+          })
+          .then(
+            function () {
+              abortRef.current = null
+              setState({ phase: 'idle', error: '' })
+            },
+            function (error) {
+              abortRef.current = null
+              if (controller && controller.signal && controller.signal.aborted) return
+              showError(describeCreateError(t, error))
+            },
+          )
+      }
+
+      return h(
+        'div',
+        { className: 'daw-dock', 'data-dsh-codex-worktree-new': DOCK_ID },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'daw-dock-button',
+            disabled: creating,
+            'aria-busy': creating ? 'true' : undefined,
+            'aria-label': t('dock.new.show'),
+            title: t('dock.new.show'),
+            onClick: startCreate,
+          },
+          creating ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : iconWorktree(14),
+          h('span', { className: 'daw-dock-label' }, creating ? t('dock.new.busy') : t('dock.new')),
+        ),
+        state.error ? h('div', { className: 'daw-dock-error', role: 'alert' }, state.error) : null,
+      )
+    }
+
+    function DockEntry(props) {
+      return boundary(null, h(WorktreeCreationDock, props))
     }
 
     /* ================================================================== *
@@ -1952,7 +2238,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'section',
-        { className: 'daw-settings', 'aria-label': t('settings.title'), 'data-dsh-auto-worktree-settings': SECTION_ID },
+        { className: 'daw-settings', 'aria-label': t('settings.title'), 'data-dsh-codex-worktree-settings': SECTION_ID },
         header,
         configBlock,
         content,
@@ -1963,7 +2249,7 @@ window.__ModuleLoader__.load({
 
     function SettingsEntry(props) {
       return boundary(
-        h('p', { className: 'daw-note' }, 'dsh-auto-worktree: render failed'),
+        h('p', { className: 'daw-note' }, 'dsh-codex-worktree: render failed'),
         h(WorktreeSettings, props),
       )
     }
@@ -2028,6 +2314,24 @@ window.__ModuleLoader__.load({
 
       registerSlot(
         ctx,
+        'conversation.input.dock',
+        {
+          name: 'conversation.input.dock',
+          id: DOCK_ID,
+          order: 20,
+          locale: LOCALE_NS,
+          label: function () {
+            return translate('dock.new')
+          },
+          inject: function () {
+            return { api: api, ctx: ctx }
+          },
+        },
+        DockEntry,
+      )
+
+      registerSlot(
+        ctx,
         'settings.section',
         {
           name: 'settings.section',
@@ -2047,7 +2351,7 @@ window.__ModuleLoader__.load({
 
     var plugin = {
       name: PLUGIN_NAME,
-      inject: ['slots', 'connection', 'locale'],
+      inject: ['slots', 'connection', 'locale', 'workspaces', 'sessions'],
       apply: apply,
     }
 

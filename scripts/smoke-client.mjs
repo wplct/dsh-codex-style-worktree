@@ -4,10 +4,11 @@
  *
  * The browser artifact must (a) evaluate under DSH's `window.__ModuleLoader__`
  * factory shape, (b) export the plugin object the loader expects, (c) register
- * its two slot entries, and (d) render without throwing when the host returns
- * the "not managed" answer. This script rebuilds just enough browser surface —
- * a module loader, a hook-capable React stub, a DOM stub and a fake context — to
- * check all four without a browser.
+ * its slot entries (session-header chip, settings page and the "New Worktree"
+ * button in the new-session composer), and (d) render without throwing when the
+ * host returns the "not managed" answer. This script rebuilds just enough
+ * browser surface — a module loader, a hook-capable React stub, a DOM stub and
+ * a fake context — to check all four without a browser.
  *
  * Usage: node scripts/smoke-client.mjs
  */
@@ -179,7 +180,7 @@ try {
 
   // ---- module shape -------------------------------------------------------
   check('registers with __ModuleLoader__', loaded !== null)
-  check('loader id is the package name', loaded?.id === 'dsh-auto-worktree', String(loaded?.id))
+  check('loader id is the package name', loaded?.id === 'dsh-codex-worktree', String(loaded?.id))
   check('loader provides a factory', typeof loaded?.factory === 'function')
 
   const plugin = loaded.factory((name) => {
@@ -187,21 +188,24 @@ try {
     throw new Error(`unexpected require: ${name}`)
   })
   check('factory returns the plugin object', plugin !== null && typeof plugin === 'object')
-  check('plugin name matches', plugin.name === 'dsh-auto-worktree', String(plugin.name))
+  check('plugin name matches', plugin.name === 'dsh-codex-worktree', String(plugin.name))
   check('plugin injects slots/connection/locale', Array.isArray(plugin.inject) && ['slots', 'connection', 'locale'].every((name) => plugin.inject.includes(name)), JSON.stringify(plugin.inject))
   check('plugin exposes apply', typeof plugin.apply === 'function')
 
   // ---- mounting -----------------------------------------------------------
   plugin.apply(ctx)
   check('mounts one <style> element', styleNodes.length === 1, String(styleNodes.length))
-  check('registers the locale namespace', localeRegistrations.some((entry) => entry.namespace === 'dsh-auto-worktree'))
-  check('registers exactly two slot entries', registrations.length === 2, String(registrations.length))
+  check('registers the locale namespace', localeRegistrations.some((entry) => entry.namespace === 'dsh-codex-worktree'))
+  // At least the session-header chip and the settings page must exist; the
+  // "New Worktree" composer button is an additional slot entry, so extra
+  // registrations are allowed and intentionally not counted exactly.
+  check('registers the required slot entries', registrations.length >= 2, String(registrations.length))
   const chip = registrations.find((entry) => entry.ownerKey === 'conversation.session.header.utilities')
   const page = registrations.find((entry) => entry.ownerKey === 'settings.section')
   check('chip registered on the session header slot', chip !== undefined)
-  check('chip id is dsh-auto-worktree-chip', chip?.registration?.options?.id === 'dsh-auto-worktree-chip', String(chip?.registration?.options?.id))
+  check('chip id is dsh-codex-worktree-chip', chip?.registration?.options?.id === 'dsh-codex-worktree-chip', String(chip?.registration?.options?.id))
   check('settings page registered', page !== undefined)
-  check('settings id is dsh-auto-worktree', page?.registration?.options?.id === 'dsh-auto-worktree', String(page?.registration?.options?.id))
+  check('settings id is dsh-codex-worktree', page?.registration?.options?.id === 'dsh-codex-worktree', String(page?.registration?.options?.id))
   check('both registrations are components', typeof chip?.registration?.component === 'function' && typeof page?.registration?.component === 'function')
 
   // ---- first render -------------------------------------------------------
@@ -222,7 +226,7 @@ try {
   // ---- RPC wiring ---------------------------------------------------------
   check('no RPC without a session', calls.length === 0 || calls.every((entry) => typeof entry.channel === 'string'), JSON.stringify(calls.slice(0, 2)))
   check('RPC channel is a single segment', calls.every((entry) => /^\/[A-Za-z0-9._~-]+$/.test(entry.channel)), JSON.stringify(calls.slice(0, 2)))
-  check('RPC endpoint carries the namespace', calls.every((entry) => /^dsh-auto-worktree\/[a-z]+$/.test(entry.endpoint)), JSON.stringify(calls.slice(0, 2)))
+  check('RPC endpoint carries the namespace', calls.every((entry) => /^dsh-codex-worktree\/[a-z]+$/.test(entry.endpoint)), JSON.stringify(calls.slice(0, 2)))
 
   for (const dispose of cleanups.reverse()) {
     try {

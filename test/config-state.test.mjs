@@ -18,7 +18,7 @@ test('resolveConfig fills every documented default', () => {
   assert.equal(config.gitTimeoutMs, 20000)
   assert.equal(config.skipChildAgents, true)
   assert.deepEqual(config.skipSessionIdPatterns, ['^session-taskboard-'])
-  assert.equal(config.disableMarker, '.dsh-auto-worktree-off')
+  assert.equal(config.disableMarker, '.dsh-codex-worktree-off')
   assert.equal(config.maxPerRepo, 32)
   assert.equal(config.noticeOnCreate, false)
   assert.equal(config.root, '')
@@ -50,7 +50,7 @@ test('resolveDshHome honours DSH_HOME and falls back to ~/.dsh', () => {
   assert.equal(resolveDshHome({ DSH_HOME: '/custom/home' }, '/home/u'), '/custom/home')
   assert.equal(resolveDshHome({ DSH_HOME: '  ' }, '/home/u'), '/home/u/.dsh')
   assert.equal(resolveDshHome({}, '/home/u'), '/home/u/.dsh')
-  assert.equal(statePathFor('/home/u/.dsh'), '/home/u/.dsh/dsh-auto-worktree/state.json')
+  assert.equal(statePathFor('/home/u/.dsh'), '/home/u/.dsh/dsh-codex-worktree/state.json')
 })
 
 test('coerceState drops unknown shapes and malformed records', () => {
