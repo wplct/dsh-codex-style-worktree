@@ -1,5 +1,5 @@
 /**
- * dsh-codex-worktree — browser half (DSH Web GUI) for 0.3.0. Display title:
+ * dsh-codex-style-worktree — browser half (DSH Web GUI) for 0.3.0. Display title:
  * "Codex 风格 Worktree" / "Codex-style Worktree".
  *
  * Registers five surfaces:
@@ -21,14 +21,14 @@
  * progress card's minimum display time, its fade-out and transient notes.
  *
  * The browser artifact is a lazy factory whose id equals the package name
- * (`dsh-codex-worktree`). React comes from the browser module table, so `react` is
+ * (`dsh-codex-style-worktree`). React comes from the browser module table, so `react` is
  * the only module this file may require.
  *
  * No build step: plain CommonJS-shaped source using React.createElement.
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-codex-worktree',
+  id: 'dsh-codex-style-worktree',
   factory: function (require) {
     'use strict'
 
@@ -43,13 +43,13 @@ window.__ModuleLoader__.load({
      * ================================================================== */
 
     /** Loader id / plugin name; must match the `insert.id`/`name` row of cordis.patch.yml. */
-    var PLUGIN_NAME = 'dsh-codex-worktree'
+    var PLUGIN_NAME = 'dsh-codex-style-worktree'
     /** Locale namespace owned by the client half. */
-    var LOCALE_NS = 'dsh-codex-worktree'
+    var LOCALE_NS = 'dsh-codex-style-worktree'
     /** Base path of the authenticated host route carrier. */
-    var API_PREFIX = '/api/dsh-codex-worktree'
+    var API_PREFIX = '/api/dsh-codex-style-worktree'
     /** RPC method prefix the connection layer derives from API_PREFIX. */
-    var RPC_NAMESPACE = 'dsh-codex-worktree'
+    var RPC_NAMESPACE = 'dsh-codex-style-worktree'
     /** Settings namespace the host exposes through the `settings` endpoint. */
     var SETTINGS_NS = 'codex-worktree'
     /**
@@ -66,17 +66,17 @@ window.__ModuleLoader__.load({
      * surface: the channel is one path segment (`/api`) and the endpoint is
      * `<namespace>/<key>` (its segments are validated individually). Together they
      * address `${API_PREFIX}/${key}` and produce `message.method ===
-     * 'dsh-codex-worktree/'+key`, which is exactly the host-side contract.
+     * 'dsh-codex-style-worktree/'+key`, which is exactly the host-side contract.
      */
     var RPC_CHANNEL = '/' + String(API_PREFIX).split('/')[1]
 
     /** Attribute guarding the single injected <style> element. */
-    var STYLE_ATTR = 'data-dsh-codex-worktree-style'
-    var CHIP_ID = 'dsh-codex-worktree-chip'
-    var SECTION_ID = 'dsh-codex-worktree'
-    var PLACEMENT_ID = 'dsh-codex-worktree-placement'
-    var PROGRESS_ID = 'dsh-codex-worktree-progress'
-    var MARKER_ID = 'dsh-codex-worktree-marker'
+    var STYLE_ATTR = 'data-dsh-codex-style-worktree-style'
+    var CHIP_ID = 'dsh-codex-style-worktree-chip'
+    var SECTION_ID = 'dsh-codex-style-worktree'
+    var PLACEMENT_ID = 'dsh-codex-style-worktree-placement'
+    var PROGRESS_ID = 'dsh-codex-style-worktree-progress'
+    var MARKER_ID = 'dsh-codex-style-worktree-marker'
 
     /* ================================================================== *
      * 2. Locale                                                           *
@@ -636,19 +636,19 @@ window.__ModuleLoader__.load({
 
     /**
      * Create the endpoint surface. Every call:
-     *   rpc.call('/api', 'dsh-codex-worktree/<key>', payload, signal)
+     *   rpc.call('/api', 'dsh-codex-style-worktree/<key>', payload, signal)
      * which is the wire form of `${API_PREFIX}/${key}` with `method` =
-     * `'dsh-codex-worktree/<key>'`.
+     * `'dsh-codex-style-worktree/<key>'`.
      */
     function createApi(ctx) {
       function invoke(key, payload, signal) {
         if (ENDPOINTS.indexOf(key) === -1) {
-          return Promise.reject(operationError('unknown-endpoint', 'dsh-codex-worktree: unknown endpoint ' + key))
+          return Promise.reject(operationError('unknown-endpoint', 'dsh-codex-style-worktree: unknown endpoint ' + key))
         }
         var connection = readConnection(ctx)
         var rpc = connection && connection.rpc
         if (!rpc || typeof rpc.call !== 'function') {
-          return Promise.reject(operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'))
+          return Promise.reject(operationError('connection-unavailable', 'dsh-codex-style-worktree: connection.rpc.call is unavailable'))
         }
         var method = RPC_NAMESPACE + '/' + key
         var pending
@@ -718,13 +718,13 @@ window.__ModuleLoader__.load({
 
     function unwrapResult(key, result) {
       if (!result || typeof result !== 'object') {
-        throw operationError('invalid-response', 'dsh-codex-worktree/' + key + ': invalid RPC response')
+        throw operationError('invalid-response', 'dsh-codex-style-worktree/' + key + ': invalid RPC response')
       }
       if (result.ok === true) return result.value
       var wireError = result.error && typeof result.error === 'object' ? result.error : {}
       throw operationError(
         wireError.code === undefined ? 'rpc-failed' : wireError.code,
-        typeof wireError.message === 'string' && wireError.message ? wireError.message : 'dsh-codex-worktree/' + key + ' failed',
+        typeof wireError.message === 'string' && wireError.message ? wireError.message : 'dsh-codex-style-worktree/' + key + ' failed',
         wireError.details,
       )
     }
@@ -1510,7 +1510,7 @@ window.__ModuleLoader__.load({
           var pending
           try {
             if (!api || typeof api.list !== 'function') {
-              throw operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable')
+              throw operationError('connection-unavailable', 'dsh-codex-style-worktree: connection.rpc.call is unavailable')
             }
             pending = api.list(undefined, controller ? controller.signal : undefined)
           } catch (error) {
@@ -1556,7 +1556,7 @@ window.__ModuleLoader__.load({
      * ================================================================== */
 
     var STYLE_TEXT = [
-      '@layer dsh-codex-worktree {',
+      '@layer dsh-codex-style-worktree {',
       '  .daw-chip-wrap, .daw-popover, .daw-settings, .daw-placement, .daw-progress {',
       '    --daw-text: var(--dsw-alias-label-primary);',
       '    --daw-secondary: var(--dsw-alias-label-secondary);',
@@ -1815,7 +1815,7 @@ window.__ModuleLoader__.load({
             setState({
               phase: 'error',
               value: null,
-              error: operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'),
+              error: operationError('connection-unavailable', 'dsh-codex-style-worktree: connection.rpc.call is unavailable'),
             })
             return undefined
           }
@@ -1891,7 +1891,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           className: 'daw-chip daw-chip-' + tone,
-          'data-dsh-codex-worktree-chip': CHIP_ID,
+          'data-dsh-codex-style-worktree-chip': CHIP_ID,
           'aria-haspopup': 'dialog',
           'aria-expanded': open ? 'true' : 'false',
           title: tooltip,
@@ -1925,7 +1925,7 @@ window.__ModuleLoader__.load({
 
     function ChipEntry(props) {
       return boundary(
-        h('span', { className: 'daw-chip daw-chip-error', title: 'dsh-codex-worktree' }, 'dsh-codex-worktree'),
+        h('span', { className: 'daw-chip daw-chip-error', title: 'dsh-codex-style-worktree' }, 'dsh-codex-style-worktree'),
         h(WorktreeChip, props),
       )
     }
@@ -1989,7 +1989,7 @@ window.__ModuleLoader__.load({
         if (disabled) return
         var api = apiRef.current
         if (!api || typeof api.clean !== 'function') {
-          fail(operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'))
+          fail(operationError('connection-unavailable', 'dsh-codex-style-worktree: connection.rpc.call is unavailable'))
           return
         }
         setBusy(force ? 'force' : 'clean')
@@ -2108,7 +2108,7 @@ window.__ModuleLoader__.load({
           className: 'daw-popover',
           role: 'dialog',
           'aria-label': t('popover.title'),
-          'data-dsh-codex-worktree-popover': '',
+          'data-dsh-codex-style-worktree-popover': '',
         },
         head,
         body,
@@ -2221,7 +2221,7 @@ window.__ModuleLoader__.load({
           'aria-expanded': open ? 'true' : 'false',
           'aria-label': t('placement.title') + ': ' + placementLabel(t, mode),
           title: t('placement.title'),
-          'data-dsh-codex-worktree-placement': PLACEMENT_ID,
+          'data-dsh-codex-style-worktree-placement': PLACEMENT_ID,
           onClick: function () {
             if (disabled) return
             setOpen(!open)
@@ -2477,7 +2477,7 @@ window.__ModuleLoader__.load({
         'section',
         {
           className: 'daw-progress daw-progress-' + mode + (mode === 'done' ? ' daw-progress-fade' : ''),
-          'data-dsh-codex-worktree-progress': PROGRESS_ID,
+          'data-dsh-codex-style-worktree-progress': PROGRESS_ID,
           'aria-label': t('progress.title'),
           'aria-live': 'polite',
         },
@@ -2525,7 +2525,7 @@ window.__ModuleLoader__.load({
           title: title,
           role: 'img',
           'aria-label': title,
-          'data-dsh-codex-worktree-marker': MARKER_ID,
+          'data-dsh-codex-style-worktree-marker': MARKER_ID,
         },
         placementIcon(14),
       )
@@ -3104,7 +3104,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'section',
-        { className: 'daw-config', 'aria-label': t('settings.edit.title'), 'data-dsh-codex-worktree-config': SETTINGS_NS },
+        { className: 'daw-config', 'aria-label': t('settings.edit.title'), 'data-dsh-codex-style-worktree-config': SETTINGS_NS },
         h('h3', { className: 'daw-block-title' }, t('settings.edit.title')),
         body,
       )
@@ -3560,7 +3560,7 @@ window.__ModuleLoader__.load({
                       }
                       return h(
                         'div',
-                        { className: 'daw-snapshots', 'data-dsh-codex-worktree-snapshots': group.repoRoot || '' },
+                        { className: 'daw-snapshots', 'data-dsh-codex-style-worktree-snapshots': group.repoRoot || '' },
                         h(
                           'div',
                           { className: 'daw-snapshots-head' },
@@ -3580,7 +3580,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'section',
-        { className: 'daw-settings', 'aria-label': t('settings.title'), 'data-dsh-codex-worktree-settings': SECTION_ID },
+        { className: 'daw-settings', 'aria-label': t('settings.title'), 'data-dsh-codex-style-worktree-settings': SECTION_ID },
         header,
         h(ConfigForm, { api: props.api }),
         managementHeader,
@@ -3592,7 +3592,7 @@ window.__ModuleLoader__.load({
 
     function SettingsEntry(props) {
       return boundary(
-        h('p', { className: 'daw-note' }, 'dsh-codex-worktree: render failed'),
+        h('p', { className: 'daw-note' }, 'dsh-codex-style-worktree: render failed'),
         h(WorktreeSettings, props),
       )
     }

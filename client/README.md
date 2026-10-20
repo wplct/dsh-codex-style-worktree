@@ -1,4 +1,4 @@
-# dsh-codex-worktree — client half (`client/client.js`)
+# dsh-codex-style-worktree — client half (`client/client.js`)
 
 Browser artifact for the DSH Web GUI. Plain CommonJS-shaped source, no build step, no
 JSX; `require('react')` is the only module it loads.
@@ -10,13 +10,13 @@ name**:
 
 ```js
 window.__ModuleLoader__.load({
-  id: 'dsh-codex-worktree',
+  id: 'dsh-codex-style-worktree',
   factory: function (require) { /* ... */ return plugin },
 })
 ```
 
-`cordis.patch.yml` inserts the row `{ id: codex-worktree, name: dsh-codex-worktree }`, so
-the loader id is `dsh-codex-worktree`. The factory is side-effect free; every resource
+`cordis.patch.yml` inserts the row `{ id: codex-worktree, name: dsh-codex-style-worktree }`, so
+the loader id is `dsh-codex-style-worktree`. The factory is side-effect free; every resource
 (stylesheet, locale dictionaries, slot entries) is installed from `apply(ctx)` through
 `ctx.effect(...)`.
 
@@ -24,7 +24,7 @@ the loader id is `dsh-codex-worktree`. The factory is side-effect free; every re
 
 ```js
 {
-  name: 'dsh-codex-worktree',
+  name: 'dsh-codex-style-worktree',
   inject: ['slots', 'connection', 'locale', 'workspaces', 'sessions'],
   apply(ctx),
 }
@@ -37,22 +37,22 @@ the loader id is `dsh-codex-worktree`. The factory is side-effect free; every re
 
 `apply` installs (registration order is an implementation detail; each entry is one `ctx.effect`-managed registration):
 
-1. one scoped `<style data-dsh-codex-worktree-style>` element (`ctx.effect`, disposed with
+1. one scoped `<style data-dsh-codex-style-worktree-style>` element (`ctx.effect`, disposed with
    the fiber);
 2. the locale dictionaries (`ctx.locale.register(LOCALE_NS, { zh, en })` + `bind`, with a
    local dictionary fallback when the service is missing);
 3. the shared Session-projection store (`installProjectionStore`, fed only by the sessions-list event);
 4. the placement selector on `conversation.hero.options`
-   (`id: dsh-codex-worktree-placement`, `order: 10`) — the official compact-options seat of
+   (`id: dsh-codex-style-worktree-placement`, `order: 10`) — the official compact-options seat of
    the New Session row, right-aligned after the workspace and preset controls;
 5. the progress card on `conversation.input.dock`
-   (`id: dsh-codex-worktree-progress`, `order: 30`);
+   (`id: dsh-codex-style-worktree-progress`, `order: 30`);
 6. the read-only sidebar marker on `sidebar.session.row.leading`
-   (`id: dsh-codex-worktree-marker`, `order: 20`);
+   (`id: dsh-codex-style-worktree-marker`, `order: 20`);
 7. the session header chip on `conversation.session.header.utilities`
-   (`id: dsh-codex-worktree-chip`, `order: -20`, `locale: dsh-codex-worktree`);
+   (`id: dsh-codex-style-worktree-chip`, `order: -20`, `locale: dsh-codex-style-worktree`);
 8. the management page on `settings.section`
-   (`id: dsh-codex-worktree`, `order: 40`, `locale: dsh-codex-worktree`).
+   (`id: dsh-codex-style-worktree`, `order: 40`, `locale: dsh-codex-style-worktree`).
 
 > `sidebar.session.row.hover` is deliberately **not** registered: the marker is read-only.
 
@@ -60,11 +60,11 @@ the loader id is `dsh-codex-worktree`. The factory is side-effect free; every re
 
 | Slot | id | Renders when | Props used |
 | --- | --- | --- | --- |
-| `conversation.hero.options` | `dsh-codex-worktree-placement` | blank new session whose workspace is a Git repository (session-scoped seat: rendered only once the Session exists) | selected workspace (resolved through `workspaces`), `t`, `inject()` → `{ api, ctx }` |
-| `conversation.input.dock` | `dsh-codex-worktree-progress` | the current session's projection has `phase === 'creating'` | `sessionId`, `t`, `inject()` → `{ api, ctx }` |
-| `sidebar.session.row.leading` | `dsh-codex-worktree-marker` | the row's session projection has `phase === 'ready'` | `sessionId` (the row's title is not needed) |
-| `settings.section` | `dsh-codex-worktree` | always | `close`, `t`, `inject()` → `{ api, ctx }` |
-| `conversation.session.header.utilities` | `dsh-codex-worktree-chip` | always | `sessionId`, `t`, `inject()` → `{ api, ctx }` |
+| `conversation.hero.options` | `dsh-codex-style-worktree-placement` | blank new session whose workspace is a Git repository (session-scoped seat: rendered only once the Session exists) | selected workspace (resolved through `workspaces`), `t`, `inject()` → `{ api, ctx }` |
+| `conversation.input.dock` | `dsh-codex-style-worktree-progress` | the current session's projection has `phase === 'creating'` | `sessionId`, `t`, `inject()` → `{ api, ctx }` |
+| `sidebar.session.row.leading` | `dsh-codex-style-worktree-marker` | the row's session projection has `phase === 'ready'` | `sessionId` (the row's title is not needed) |
+| `settings.section` | `dsh-codex-style-worktree` | always | `close`, `t`, `inject()` → `{ api, ctx }` |
+| `conversation.session.header.utilities` | `dsh-codex-style-worktree-chip` | always | `sessionId`, `t`, `inject()` → `{ api, ctx }` |
 
 The client resolves cross-cutting services defensively (`ctx.get(name)` plus the property
 fallback), so a composition that does not expose `workspaces` / `sessions` degrades to a
@@ -204,12 +204,12 @@ Two blocks:
 All calls go through the authenticated `/api` carrier:
 
 ```js
-connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', payload, signal)
+connection.rpc.call('/api', 'dsh-codex-style-worktree/<endpoint>', payload, signal)
 ```
 
 The channel must be a **single segment** (`/api`); the endpoint carries the namespace and
-is addressable at `/api/dsh-codex-worktree/<endpoint>`, with
-`message.method === 'dsh-codex-worktree/<endpoint>'`.
+is addressable at `/api/dsh-codex-style-worktree/<endpoint>`, with
+`message.method === 'dsh-codex-style-worktree/<endpoint>'`.
 
 | Endpoint | Request | Success value |
 | --- | --- | --- |
@@ -239,7 +239,7 @@ the checkout.
 | Resolve the hero workspace | `workspaces.list.getSnapshot().items` (`{ workspaceId, path, title, sessionIds }`) | the selector maps `selectedId` → path; also accepts `byId` snapshots. |
 | Read a session projection | `sessions.list.getSnapshot().byId[sessionId].projectionValues.codexWorktree` + `sessions.list.subscribe` | progress / marker / chip base state; event-driven only. |
 | Resolve a conversation title | `sessions.list.getSnapshot()` | accepts `items`, `ids` and `byId`; title field is `displayTitle`, falling back to `title`/`name` (used by the management UI when it lists conversations). |
-| Clean / prune / list / restore | `connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', …)` | see the RPC table; `restore` creates an unmanaged detached checkout and the page then refreshes `list`. |
+| Clean / prune / list / restore | `connection.rpc.call('/api', 'dsh-codex-style-worktree/<endpoint>', …)` | see the RPC table; `restore` creates an unmanaged detached checkout and the page then refreshes `list`. |
 
 The client never creates a Workspace and never creates a Session as part of worktree
 creation.

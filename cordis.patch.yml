@@ -1,7 +1,7 @@
-# dsh-codex-worktree bundle patch: inserts the plugin row into the profile roster.
+# dsh-codex-style-worktree bundle patch: inserts the plugin row into the profile roster.
 # Plain `insert` row only (id + name, no config, no expressions) so dshmarket can
 # hot-mount it without a restart; every knob has a default in lib/config.js and
 # can be overridden from the profile's own cordis.patch.yml like any other row.
 - insert:
     - id: codex-worktree
-      name: dsh-codex-worktree
+      name: dsh-codex-style-worktree

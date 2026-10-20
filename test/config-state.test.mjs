@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { EDITABLE_FIELDS, editableDefaults, resolveConfig, resolvePlacement } from '../lib/config.js'
 import { PLACEMENT_TTL_MS } from '../lib/constants.js'
-import { coerceState, createStateStore, emptyState, placementKey, resolveDshHome, statePathFor } from '../lib/state.js'
+import { coerceState, createStateStore, emptyState, placementKey, resolveDshHome, statePathFor, migrateStateDir } from '../lib/state.js'
 
 test('resolveConfig fills every documented default', () => {
   const config = resolveConfig({})
@@ -20,7 +21,7 @@ test('resolveConfig fills every documented default', () => {
   assert.equal(config.gitTimeoutMs, 20000)
   assert.equal(config.skipChildAgents, true)
   assert.deepEqual(config.skipSessionIdPatterns, ['^session-taskboard-'])
-  assert.equal(config.disableMarker, '.dsh-codex-worktree-off')
+  assert.equal(config.disableMarker, '.dsh-codex-style-worktree-off')
   assert.equal(config.maxPerRepo, 32)
   assert.equal(config.noticeOnCreate, false)
   assert.equal(config.root, '')
@@ -102,7 +103,7 @@ test('resolveDshHome honours DSH_HOME and falls back to ~/.dsh', () => {
   assert.equal(resolveDshHome({ DSH_HOME: '/custom/home' }, '/home/u'), '/custom/home')
   assert.equal(resolveDshHome({ DSH_HOME: '  ' }, '/home/u'), '/home/u/.dsh')
   assert.equal(resolveDshHome({}, '/home/u'), '/home/u/.dsh')
-  assert.equal(statePathFor('/home/u/.dsh'), '/home/u/.dsh/dsh-codex-worktree/state.json')
+  assert.equal(statePathFor('/home/u/.dsh'), '/home/u/.dsh/dsh-codex-style-worktree/state.json')
 })
 
 test('coerceState drops unknown shapes and malformed records', () => {
@@ -209,8 +210,8 @@ test('coerceState migrates a v2 document and keeps only well-formed snapshot row
     records: { a: { path: '/p', repoRoot: '/r' } },
     placements: { '/repo': { mode: 'local', updatedAt: '2026-01-01T00:00:00.000Z' } },
     snapshots: {
-      'refs/dsh-codex-worktree/261020-120000-123456': {
-        ref: 'refs/dsh-codex-worktree/261020-120000-123456',
+      'refs/dsh-codex-style-worktree/261020-120000-123456': {
+        ref: 'refs/dsh-codex-style-worktree/261020-120000-123456',
         repoRoot: '/r',
         commit: 'a'.repeat(40),
         sessionId: 'session-1',
@@ -223,15 +224,15 @@ test('coerceState migrates a v2 document and keeps only well-formed snapshot row
   assert.equal(state.schemaVersion, 3)
   assert.deepEqual(Object.keys(state.records), ['a'])
   assert.deepEqual(Object.keys(state.placements), ['/repo'])
-  assert.deepEqual(Object.keys(state.snapshots), ['refs/dsh-codex-worktree/261020-120000-123456'])
-  assert.equal(state.snapshots['refs/dsh-codex-worktree/261020-120000-123456'].commit, 'a'.repeat(40))
+  assert.deepEqual(Object.keys(state.snapshots), ['refs/dsh-codex-style-worktree/261020-120000-123456'])
+  assert.equal(state.snapshots['refs/dsh-codex-style-worktree/261020-120000-123456'].commit, 'a'.repeat(40))
 })
 
 test('the store round-trips snapshot rows and marks restores durably', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dwt-state-'))
   const store = createStateStore(join(dir, 'state.json'))
   assert.deepEqual(await store.snapshots(), [])
-  const ref = 'refs/dsh-codex-worktree/261020-120000-123456'
+  const ref = 'refs/dsh-codex-style-worktree/261020-120000-123456'
   await store.setSnapshot({
     ref,
     repoRoot: '/repo',
@@ -247,4 +248,19 @@ test('the store round-trips snapshot rows and marks restores durably', async () 
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
   assert.equal(raw.schemaVersion, 3)
   assert.equal(raw.snapshots[ref].restoredPath, '/repo/.agents/worktrees/wt-restored-1')
+})
+
+test('migrateStateDir moves a pre-rename sidecar directory once', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'dwt-home-'))
+  const legacy = join(home, 'dsh-codex-worktree')
+  await mkdir(legacy, { recursive: true })
+  await writeFile(join(legacy, 'state.json'), JSON.stringify(emptyState()), 'utf8')
+  const target = migrateStateDir(home)
+  assert.equal(target, join(home, 'dsh-codex-style-worktree'))
+  assert.equal(existsSync(join(target, 'state.json')), true)
+  assert.equal(existsSync(legacy), false)
+  // A second call is a no-op, and a fresh home needs no migration.
+  assert.equal(migrateStateDir(home), target)
+  const fresh = await mkdtemp(join(tmpdir(), 'dwt-home-'))
+  assert.equal(migrateStateDir(fresh), join(fresh, 'dsh-codex-style-worktree'))
 })

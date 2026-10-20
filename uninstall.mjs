@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Uninstall dsh-codex-worktree from a DSH profile.
+ * Uninstall dsh-codex-style-worktree from a DSH profile.
  *
  * What it does
  *   1. removes the marked patch block (markers and everything between them)
  *      from <profile>/cordis.patch.yml, after backing the file up to
  *      .bak-<ISO-timestamp>; every other line of the file is preserved;
- *   2. removes <profile>/node_modules/dsh-codex-worktree/ recursively;
+ *   2. removes <profile>/node_modules/dsh-codex-style-worktree/ recursively;
  *   3. prints every action and backup path.
  *
  * Idempotent: running it twice is safe — the second run reports nothing to do
@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const PACKAGE_NAME = 'dsh-codex-worktree';
+const PACKAGE_NAME = 'dsh-codex-style-worktree';
 const markerStart = `# >>> ${PACKAGE_NAME} >>>`;
 const markerEnd = `# <<< ${PACKAGE_NAME} <<<`;
 
@@ -133,7 +133,7 @@ if (!fs.existsSync(patchPath)) {
     }
   }
   if (start === -1) {
-    patchPlan = 'no dsh-codex-worktree marker; skipped';
+    patchPlan = 'no dsh-codex-style-worktree marker; skipped';
   } else if (end === -1) {
     patchPlan = `marker start found at line ${start + 1} but no end marker; refusing to guess, left untouched`;
   } else {

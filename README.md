@@ -1,19 +1,27 @@
-# Codex-style Worktree (dsh-codex-worktree)
+# Codex-style Worktree (dsh-codex-style-worktree)
 
 > A "work like Codex" placement choice for DSH sessions: on the new-session hero row, pick **Local** or **New local worktree** (the default) next to the workspace chip; after you send the first message the plugin creates a detached checkout and switches **that session's** cwd into it. No new Workspace, no naming, no branch from the plugin (Git owns branch naming at commit time).
 
-- Version: `0.4.0` (2026-10-20; package / plugin id / loader row name: `dsh-codex-worktree`; profile-patch insert row id: `codex-worktree`)
-- API namespace: `/api/dsh-codex-worktree`, RPC method prefix `dsh-codex-worktree/`; sidecar: `$DSH_HOME/dsh-codex-worktree/state.json`; disable marker: `.dsh-codex-worktree-off`
-- GitHub: <https://github.com/wplct/dsh-codex-worktree>
+- Version: `0.5.0` (2026-10-20; package / plugin id / loader row name: `dsh-codex-style-worktree`; profile-patch insert row id: `codex-worktree`)
+- API namespace: `/api/dsh-codex-style-worktree`, RPC method prefix `dsh-codex-style-worktree/`; sidecar: `$DSH_HOME/dsh-codex-style-worktree/state.json`; disable marker: `.dsh-codex-style-worktree-off`
+- GitHub: <https://github.com/wplct/dsh-codex-style-worktree>
 - Requirements: DSH `0.2.0-rc.2` / `0.2.1-rc.2`, Node.js `>= 22.19.0`, `git` on PATH
 - License: MIT
+
+## 0.5.0: rename-only release
+
+- Package name / plugin id / loader row name / API namespace / RPC prefix / sidecar directory all move from `dsh-codex-worktree` to `dsh-codex-style-worktree`; the display title "Codex-style Worktree" is unchanged.
+- The **settings namespace stays `codex-worktree`** (the profile-patch insert row id is untouched), so saved settings survive; every editable field is unchanged.
+- On first boot the sidecar directory migrates automatically from `~/.dsh/dsh-codex-worktree` to `~/.dsh/dsh-codex-style-worktree` (rename, no data loss; if the rename fails the old directory keeps being read).
+- The repository opt-out marker is now `.dsh-codex-style-worktree-off`; the old `.dsh-codex-worktree-off` is still honored.
+- Upgrade path: remove the old package, install the new one (`dsh plugin --profile desktop remove dsh-codex-worktree`, then `dsh plugin --profile desktop add github:wplct/dsh-codex-style-worktree`), then fully quit and reopen DSH once.
 
 ## What changed in 0.4.0 (vs 0.3.0)
 
 | Capability | 0.3.0 | 0.4.0 |
 | --- | --- | --- |
 | Cleanup guard | Cleanup deletes directly | Refused when the checkout is **another** active session's current cwd (`worktree-in-use`); cleaning your own session's checkout first moves its cwd back to the workspace; `force` overrides after confirmation |
-| Snapshot before delete | Only autoPrune kept a ref for detached commits | Every delete path: when the checkout is detached and `HEAD ≠ baseCommit`, write `refs/dsh-codex-worktree/<timestamp+session suffix>` and record it in the sidecar |
+| Snapshot before delete | Only autoPrune kept a ref for detached commits | Every delete path: when the checkout is detached and `HEAD ≠ baseCommit`, write `refs/dsh-codex-style-worktree/<timestamp+session suffix>` and record it in the sidecar |
 | Snapshot restore | Manual `git branch` only | `/wt-snapshots`, `/wt-restore <ref>`, and a "recoverable snapshots" list in the settings page |
 | Archive cleanup | Checkouts always kept after a session ends | Optional `cleanupOnArchive` (default off): a lazy sweep removes clean, unused checkouts after archive |
 | RPC | 6 endpoints | 7 (adds `restore`); the `list` response gains per-repository `snapshots` |
@@ -90,7 +98,7 @@ Position: the official **`conversation.hero.options`** seat — the compact opti
 | --- | --- |
 | `not-git-repository` | The workspace is not a Git repository |
 | `no-commit` | The repository has no commit yet |
-| `disabled` | `enabled: false`, or `.dsh-codex-worktree-off` exists at the repository root |
+| `disabled` | `enabled: false`, or `.dsh-codex-style-worktree-off` exists at the repository root |
 | `root-unreachable` | The configured `root` is not writable, or the session sandbox forbids that path |
 | `limit-reached` | The repository reached `maxPerRepo` (clean up old checkouts first) |
 | other message | git error / timeout etc., shown verbatim |
@@ -138,14 +146,19 @@ One `Codex-style Worktree` section with two blocks:
 Prerequisites: DSH `0.2.0-rc.2` / `0.2.1-rc.2`, Node.js `>= 22.19.0`, `git`; finish or stop running tasks/sessions first.
 
 ```sh
-dsh plugin --profile desktop add github:wplct/dsh-codex-worktree
+dsh plugin --profile desktop add github:wplct/dsh-codex-style-worktree
 ```
 
 Then **quit and reopen DSH once** (the bundle layer takes effect; this is not a page refresh). Afterwards **configuration changes need no restart** (volatile, live).
 
 ### 3.2 Upgrading from older versions
 
-**0.3.x → 0.4.0 (current)**:
+**0.4.x → 0.5.0 (current, rename-only)**:
+
+- rename only, no feature changes (the 0.4.0 cleanup guard, restorable snapshots and `cleanupOnArchive` all stay);
+- follow the "0.5.0: rename-only release" section above: remove + add + restart; settings values, sidecar records and snapshot refs are preserved (the ref prefix follows the new name as `refs/dsh-codex-style-worktree/`; refs written by the old version can still be pointed at with `git update-ref`).
+
+**0.3.x → 0.4.0 (history)**:
 
 - no breaking UI changes: the placement selector, creation-after-send, three-step progress card, read-only sidebar marker, chip and projections all stay; existing placement/config records keep working;
 - the sidecar `state.json` is **migrated in memory on read** from v2 (or older v1) to **v3** (adds `snapshots`; older versions also get `placements`) with **no data loss**, and the next write persists v3;
@@ -175,9 +188,9 @@ DSH_HOME=/path/to/.dsh node install.mjs --profile desktop
 What the script does:
 
 1. validates the source package (`package.json`, `cordis.patch.yml`, `lib/**`, `client/**` must all be there; a missing half aborts with an absolute path in the error);
-2. copies `package.json`, `cordis.patch.yml`, `README*.md`, `lib/**` and `client/**` (recursively) into `<profile>/node_modules/dsh-codex-worktree/` — staged first in a temporary directory on the same volume, never overwriting the live directory in place;
+2. copies `package.json`, `cordis.patch.yml`, `README*.md`, `lib/**` and `client/**` (recursively) into `<profile>/node_modules/dsh-codex-style-worktree/` — staged first in a temporary directory on the same volume, never overwriting the live directory in place;
 3. runs `node --check` on **every** `.js` file in the staged copy and publishes only if all of them pass; a failure rolls back;
-4. backs up `<profile>/cordis.patch.yml` to `.bak-<ISO timestamp>` and appends the marked patch block (the package's `cordis.patch.yml` minus `#` comment lines; that file currently holds only the config-less `insert` row, defaults come from `lib/config.js`). If the file already contains `# >>> dsh-codex-worktree >>>`, the append is skipped;
+4. backs up `<profile>/cordis.patch.yml` to `.bak-<ISO timestamp>` and appends the marked patch block (the package's `cordis.patch.yml` minus `#` comment lines; that file currently holds only the config-less `insert` row, defaults come from `lib/config.js`). If the file already contains `# >>> dsh-codex-style-worktree >>>`, the append is skipped;
 5. prints target path, file count, backup paths and next steps.
 
 The direct installer explicitly does **not**: modify the profile's `package.json`, run `pnpm`/`npm`, or restart DSH.
@@ -187,7 +200,7 @@ The direct installer explicitly does **not**: modify the profile's `package.json
 Uninstall with the symmetric DSH plugin command, then restart DSH:
 
 ```sh
-dsh plugin --profile desktop remove dsh-codex-worktree
+dsh plugin --profile desktop remove dsh-codex-style-worktree
 ```
 
 If the package was installed with the **direct-install** script from section 3.3, use `uninstall.mjs` instead:
@@ -198,22 +211,22 @@ node uninstall.mjs             # default profile
 node uninstall.mjs --profile web
 ```
 
-`uninstall.mjs` removes the marked block (markers and everything between them, other lines preserved, file backed up to `.bak-<ISO timestamp>` first) from `<profile>/cordis.patch.yml`, deletes `<profile>/node_modules/dsh-codex-worktree/` recursively, and prints every action and backup path; it is idempotent and `--dry-run` writes nothing. It also reports (without deleting) install snapshots `.dsh-codex-worktree.previous-*` and the sidecar ledger.
+`uninstall.mjs` removes the marked block (markers and everything between them, other lines preserved, file backed up to `.bak-<ISO timestamp>` first) from `<profile>/cordis.patch.yml`, deletes `<profile>/node_modules/dsh-codex-style-worktree/` recursively, and prints every action and backup path; it is idempotent and `--dry-run` writes nothing. It also reports (without deleting) install snapshots `.dsh-codex-style-worktree.previous-*` and the sidecar ledger.
 
 | Goal | Action |
 | --- | --- |
-| Full uninstall | `dsh plugin --profile desktop remove dsh-codex-worktree` (direct install: `node uninstall.mjs`), then restart DSH |
-| Revert the profile patch only | `cp <profile>/cordis.patch.yml.bak-<timestamp> <profile>/cordis.patch.yml`, delete `node_modules/dsh-codex-worktree/` manually, restart |
-| Roll back to the previous package | rename the printed `.dsh-codex-worktree.previous-<timestamp>` directory back to `node_modules/dsh-codex-worktree`, restart |
+| Full uninstall | `dsh plugin --profile desktop remove dsh-codex-style-worktree` (direct install: `node uninstall.mjs`), then restart DSH |
+| Revert the profile patch only | `cp <profile>/cordis.patch.yml.bak-<timestamp> <profile>/cordis.patch.yml`, delete `node_modules/dsh-codex-style-worktree/` manually, restart |
+| Roll back to the previous package | rename the printed `.dsh-codex-style-worktree.previous-<timestamp>` directory back to `node_modules/dsh-codex-style-worktree`, restart |
 
-Uninstall never deletes your worktrees or branches: check `/wt-status`, clean up with `/wt-clean`, or run `git worktree remove <path>` / `git branch -d <branch>` yourself. Deleting the sidecar ledger (`$DSH_HOME/dsh-codex-worktree/`) also clears the remembered placements.
+Uninstall never deletes your worktrees or branches: check `/wt-status`, clean up with `/wt-clean`, or run `git worktree remove <path>` / `git branch -d <branch>` yourself. Deleting the sidecar ledger (`$DSH_HOME/dsh-codex-style-worktree/`) also clears the remembered placements.
 
 ## 5. Configuration
 
 ### 5.1 Where configuration lives
 
 - Defaults and validation: `lib/config.js` (`resolveConfig` is the single source of truth; `EDITABLE_FIELDS` defines the settings form fields and their order);
-- package `cordis.patch.yml`: a **plain insert row** (`id: codex-worktree`, `name: dsh-codex-worktree`) with no config, so the market can hot-mount it;
+- package `cordis.patch.yml`: a **plain insert row** (`id: codex-worktree`, `name: dsh-codex-style-worktree`) with no config, so the market can hot-mount it;
 - runtime override: the `- id: codex-worktree` config row in the active profile's `cordis.patch.yml` (the settings page maintains it automatically);
 - every user-visible field is **volatile**: saving applies immediately, no restart or re-mount required.
 
@@ -239,7 +252,7 @@ Uninstall never deletes your worktrees or branches: check `/wt-status`, clean up
 | `skipChildAgents` | boolean | `true` | switch | Never create a worktree for subagents/child sessions |
 | `skipSessionIdPatterns` | string[] | `["^session-taskboard-"]` | multiline text | One regular expression per line; matches are skipped (taskboard sessions by default) |
 | `skipPresets` | string[] | `[]` | multiline text | One regular expression per line; matching agent presets are skipped |
-| `disableMarker` | string | `.dsh-codex-worktree-off` | text | A file with this name at the repo root or in the session cwd disables creation; plain file name, no `/` `\` |
+| `disableMarker` | string | `.dsh-codex-style-worktree-off` | text | A file with this name at the repo root or in the session cwd disables creation; plain file name, no `/` `\` |
 | `maxPerRepo` | number | `32` | number | Upper bound of plugin-managed checkouts per repository; positive integer; hitting it reports `limit-reached` |
 | `noticeOnCreate` | boolean | `false` | switch | Queue one extra user-context message describing the new checkout |
 
@@ -287,11 +300,11 @@ Three entry points with identical rules:
 
 ### 6.2 Snapshots and restore
 
-- **When a snapshot is taken automatically**: before deleting a **detached (no branch) checkout whose `HEAD ≠ baseCommit`**, the plugin writes the current `HEAD` as the snapshot ref `refs/dsh-codex-worktree/<timestamp+session suffix>` and records it in the sidecar `snapshots`. This applies to every delete path (`/wt-clean`, chip cleanup, settings-page delete, `prune`, the archive lazy sweep).
+- **When a snapshot is taken automatically**: before deleting a **detached (no branch) checkout whose `HEAD ≠ baseCommit`**, the plugin writes the current `HEAD` as the snapshot ref `refs/dsh-codex-style-worktree/<timestamp+session suffix>` and records it in the sidecar `snapshots`. This applies to every delete path (`/wt-clean`, chip cleanup, settings-page delete, `prune`, the archive lazy sweep).
 - `/wt-snapshots`: lists the **current session's repository** snapshots (all repositories when the session is unmanaged): ref, commit, created time, restored marker.
 - `/wt-restore <ref>`: restores a snapshot into a **new detached checkout** (named `wt-restored-<timestamp>`) and returns `{ ref, path, commit, repoRoot }`; the restored checkout is **not bound to the original session** and **does not switch any session's cwd** — it just brings the data back.
 - **Settings page "worktree management"**: the `list` response carries a **top-level** `snapshots` array (each row has `repoRoot`, newest first) and the page groups it by repository into a "recoverable snapshots" list (ref, commit, created, restored marker); clicking *Restore* creates a new checkout and refreshes the list.
-- A restored checkout is an **ordinary git worktree** (in the pool, visible in `git worktree list`) but is **not written into sidecar `records`**: it has no sessionId and is not bound to a session, so it never shows up in the managed list or as a `/wt-clean` target; remove it manually with `git worktree remove <path>` when done. `refs/dsh-codex-worktree/…` are plain Git refs, so `git branch <name> <ref>` still works.
+- A restored checkout is an **ordinary git worktree** (in the pool, visible in `git worktree list`) but is **not written into sidecar `records`**: it has no sessionId and is not bound to a session, so it never shows up in the managed list or as a `/wt-clean` target; remove it manually with `git worktree remove <path>` when done. `refs/dsh-codex-style-worktree/…` are plain Git refs, so `git branch <name> <ref>` still works.
 - The same snapshot can be **restored repeatedly** (each restore creates a new checkout and updates that snapshot's `restoredAt` / `restoredPath`).
 - Snapshot failure policy: `prune` and the archive lazy sweep **skip** removing that entry to avoid losing commits; an explicit user `clean` only logs a warning and proceeds.
 - Snapshots only capture the **committed** HEAD; uncommitted changes are not included and cannot be restored.
@@ -307,13 +320,13 @@ Three entry points with identical rules:
 
 - With `autoPrune: true` (the default), every successful creation prunes the repository's oldest checkouts beyond `autoPruneKeep` in the background; dirty checkouts and anything younger than `pruneGraceMs` are left alone.
 - A manual prune (the settings page's *Prune now*, or the `prune` endpoint) runs immediately for one or all repositories and returns the removed entries plus the snapshots it created.
-- A pruned detached commit gets a `refs/dsh-codex-worktree/<name>` snapshot first (see 6.2), recoverable with `/wt-restore` or `git branch <name> <ref>`; uncommitted changes cannot be recovered.
+- A pruned detached commit gets a `refs/dsh-codex-style-worktree/<name>` snapshot first (see 6.2), recoverable with `/wt-restore` or `git branch <name> <ref>`; uncommitted changes cannot be recovered.
 
 ## 7. RPC and state sync
 
 ### 7.1 RPC endpoints
 
-The browser calls through the authenticated `/api` carrier: `connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', payload, signal)`; the host registers `/api/dsh-codex-worktree/<endpoint>` and asserts `message.method === 'dsh-codex-worktree/<endpoint>'`; responses are `{ok:true,value}` or `{ok:false,error:{code,message,details}}`.
+The browser calls through the authenticated `/api` carrier: `connection.rpc.call('/api', 'dsh-codex-style-worktree/<endpoint>', payload, signal)`; the host registers `/api/dsh-codex-style-worktree/<endpoint>` and asserts `message.method === 'dsh-codex-style-worktree/<endpoint>'`; responses are `{ok:true,value}` or `{ok:false,error:{code,message,details}}`.
 
 | Endpoint | Request | Response value | Error codes |
 | --- | --- | --- | --- |
@@ -337,7 +350,7 @@ The browser calls through the authenticated `/api` carrier: `connection.rpc.call
 - projection events go into the session log (~4 small events per new session) — that is DSH's native state-sync mechanism and the price of zero polling;
 - cleanup: live session → the host appends `null`, the marker disappears immediately; non-live session → `null` is appended on the next `agent/created` consistency repair (see the known limitation in 2.4).
 
-### 7.3 Sidecar data (`$DSH_HOME/dsh-codex-worktree/state.json`) v3
+### 7.3 Sidecar data (`$DSH_HOME/dsh-codex-style-worktree/state.json`) v3
 
 ```jsonc
 {
@@ -361,8 +374,8 @@ The browser calls through the authenticated `/api` carrier: `connection.rpc.call
     "/abs/repo": { "mode": "worktree", "updatedAt": "ISO" }
   },
   "snapshots": {
-    "refs/dsh-codex-worktree/…": {
-      "ref": "refs/dsh-codex-worktree/…",
+    "refs/dsh-codex-style-worktree/…": {
+      "ref": "refs/dsh-codex-style-worktree/…",
       "repoRoot": "/abs/repo",
       "commit": "<sha>",
       "sessionId": "session-…",
@@ -428,7 +441,7 @@ Out of scope: cloud / Codex Web integration / multiple placements; automatic mer
 | The progress card is stuck on "Check out files" | git may be hanging or timing out: check that `git` is on PATH and the repository is healthy; raise `gitTimeoutMs` if needed. |
 | Settings save reports "configuration was changed elsewhere" | Revision conflict: the form refreshed automatically, confirm and save again; both forms (Plugins page / this page) share one revision. |
 | Settings save reports `settings-unavailable` | This composition has no settings service (headless / non-profile): config degrades to read-only; edit the active profile's `cordis.patch.yml` (`- id: codex-worktree`) and restart. |
-| Managed sessions have no sidebar icon | The icon only shows when the projection is `phase === 'ready'`; after cleaning a non-live session it clears on the next `agent/created`. Confirm both server and client restarted on 0.4.0. |
+| Managed sessions have no sidebar icon | The icon only shows when the projection is `phase === 'ready'`; after cleaning a non-live session it clears on the next `agent/created`. Confirm both server and client restarted on 0.5.0. |
 | Cleanup fails with `worktree-in-use` | The checkout directory is the cwd of **another** live session (Codex-compatible refusal): run `/wt-clean` from that session (its cwd is moved back to the workspace), or override with `force` / "force clean" once it no longer needs the directory; note this loses that session's working directory and uncommitted changes. |
 | No restore entry point / empty snapshot list | Snapshots are only created when deleting a detached checkout whose `HEAD ≠ baseCommit` (see 6.2); use `/wt-snapshots` to check the current session's repository (all repositories when unmanaged), and open the "worktree management" block in the settings page. |
 | Restored but cannot find the new checkout in the managed list | Restores produce a plain git worktree (`wt-restored-…`) that is not written to sidecar records, so it is not in the managed list; use the path returned by `/wt-restore` or `git worktree list`, and remove it with `git worktree remove`. |
@@ -436,15 +449,15 @@ Out of scope: cloud / Codex Web integration / multiple placements; automatic mer
 | The chip says "not managed" although the session is in a worktree | The session is not managed by this plugin (created by an older version, manually via `git worktree add`, or placement=local); old records still appear in the settings page and can be cleaned. |
 | The 0.2.x "New Worktree" button is gone | Removed in 0.3.0; creation now happens automatically after the first message. |
 | Old workspaces/checkouts remain after upgrading | The 0.2.x button may have created workspaces and checkouts: confirm the extra sidebar workspaces, the corresponding `.agents/worktrees/wt-*` directories and pending records, then clean them manually (see 3.2). |
-| Startup error `Cannot find package 'dsh-codex-worktree'` | Re-run `dsh plugin --profile desktop add github:wplct/dsh-codex-worktree` (direct install: `node install.mjs`), confirm `<profile>/node_modules/dsh-codex-worktree/lib/index.js` exists, restart DSH. |
+| Startup error `Cannot find package 'dsh-codex-style-worktree'` | Re-run `dsh plugin --profile desktop add github:wplct/dsh-codex-style-worktree` (direct install: `node install.mjs`), confirm `<profile>/node_modules/dsh-codex-style-worktree/lib/index.js` exists, restart DSH. |
 
 ## 11. Layout
 
 ```text
-dsh-codex-worktree/
+dsh-codex-style-worktree/
 ├── install.mjs          # direct install: copy into the profile + append the marked block (--dry-run / --profile)
 ├── uninstall.mjs        # direct uninstall: drop the marked block + remove the directory (idempotent, --dry-run)
-├── package.json         # 0.4.0; exports "." (host) / "./client" (web); engines node >=22.19
+├── package.json         # 0.5.0; exports "." (host) / "./client" (web); engines node >=22.19
 ├── cordis.patch.yml     # plain insert row (id: codex-worktree, no config)
 ├── lib/                 # host half: config defaults/validation, volatile live config, agent/created creation,
 │                        # git wrapper, pool rules, cleanup guard (worktree-in-use), snapshot/restore, archive lazy sweep,

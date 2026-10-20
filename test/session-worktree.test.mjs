@@ -239,6 +239,14 @@ test('non-git directories, missing commits, child agents, markers and switches s
     const env = await setup()
     const agent = createAgent(env.repo)
     env.roots.push(agent)
+    await writeFile(join(env.repo, '.dsh-codex-style-worktree-off'), '', 'utf8')
+    assert.equal((await detach(env, agent)).reason, 'marker')
+  }
+  {
+    // The pre-rename marker is still honored after the package rename.
+    const env = await setup()
+    const agent = createAgent(env.repo)
+    env.roots.push(agent)
     await writeFile(join(env.repo, '.dsh-codex-worktree-off'), '', 'utf8')
     assert.equal((await detach(env, agent)).reason, 'marker')
   }
@@ -361,7 +369,7 @@ test('pruning a detached checkout preserves its commits as a snapshot ref', asyn
   assert.equal(pruned.removed.length, 1, JSON.stringify(pruned))
   assert.equal(pruned.snapshots.length, 1, JSON.stringify(pruned))
   assert.equal(pruned.snapshots[0].commit, head)
-  const refs = git(env.repo, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/dsh-codex-worktree'])
+  const refs = git(env.repo, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/dsh-codex-style-worktree'])
   assert.match(refs, new RegExp(head))
   git(env.repo, ['update-ref', '-d', pruned.snapshots[0].ref])
 })
@@ -440,7 +448,7 @@ test('a detached checkout with new commits is snapshotted on clean and can be re
   assert.equal(snapshot.commit, head)
   assert.equal(git(env.repo, ['rev-parse', snapshot.ref]), head)
   assert.equal((await env.store.snapshots()).length, 1)
-  assert.equal(git(env.repo, ['for-each-ref', '--format=%(refname)', 'refs/dsh-codex-worktree']).includes(snapshot.ref), true)
+  assert.equal(git(env.repo, ['for-each-ref', '--format=%(refname)', 'refs/dsh-codex-style-worktree']).includes(snapshot.ref), true)
 
   const restored = await env.runtime.restoreSnapshot({ ref: snapshot.ref })
   assert.equal(git(restored.path, ['rev-parse', 'HEAD']), head)
@@ -450,7 +458,7 @@ test('a detached checkout with new commits is snapshotted on clean and can be re
   assert.equal((await env.store.getSnapshot(snapshot.ref))?.restoredPath, restored.path)
 
   await assert.rejects(
-    () => env.runtime.restoreSnapshot({ ref: 'refs/dsh-codex-worktree/missing' }),
+    () => env.runtime.restoreSnapshot({ ref: 'refs/dsh-codex-style-worktree/missing' }),
     (error) => error.code === 'snapshot-not-found',
   )
   await assert.rejects(() => env.runtime.restoreSnapshot({ ref: '  ' }), (error) => error.code === 'bad-request')

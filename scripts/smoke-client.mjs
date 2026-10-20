@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * End-to-end client smoke test for dsh-codex-worktree 0.3.0.
+ * End-to-end client smoke test for dsh-codex-style-worktree 0.3.0.
  *
  * The browser artifact must evaluate under DSH's `window.__ModuleLoader__` factory
  * shape, register the five 0.3.0 slot entries, and behave correctly in the
@@ -511,7 +511,7 @@ function listValue() {
   if (listBehavior.withSnapshots) {
     value.snapshots = [
       {
-        ref: 'refs/dsh-codex-worktree/wt-2026-10-19-4f2a',
+        ref: 'refs/dsh-codex-style-worktree/wt-2026-10-19-4f2a',
         repoRoot: '/repo',
         commit: 'deadbeefcafe0123',
         sessionId: 's9',
@@ -519,7 +519,7 @@ function listValue() {
         createdAt: '2026-10-19T09:00:00.000Z',
       },
       {
-        ref: 'refs/dsh-codex-worktree/wt-2026-10-18-a1b2',
+        ref: 'refs/dsh-codex-style-worktree/wt-2026-10-18-a1b2',
         repoRoot: '/repo',
         commit: '0123456789abcdef',
         sessionId: 's8',
@@ -532,12 +532,12 @@ function listValue() {
   return value
 }
 function defaultHandler(endpoint, payload) {
-  if (endpoint === 'dsh-codex-worktree/placement') {
+  if (endpoint === 'dsh-codex-style-worktree/placement') {
     const workspacePath = typeof payload.workspacePath === 'string' ? payload.workspacePath : '/repo'
     if (placementBehavior.respond) return placementBehavior.respond(workspacePath, payload.mode)
     return { ok: true, value: { workspacePath, mode: payload.mode || 'worktree', defaultMode: 'worktree', isGit: placementBehavior.isGit !== false } }
   }
-  if (endpoint === 'dsh-codex-worktree/status') {
+  if (endpoint === 'dsh-codex-style-worktree/status') {
     return {
       ok: true,
       value: {
@@ -553,9 +553,9 @@ function defaultHandler(endpoint, payload) {
       },
     }
   }
-  if (endpoint === 'dsh-codex-worktree/list') return { ok: true, value: listValue() }
-  if (endpoint === 'dsh-codex-worktree/prune') return { ok: true, value: { removed: [{ path: '/repo/x', sessionId: 's9' }], snapshots: [] } }
-  if (endpoint === 'dsh-codex-worktree/clean') {
+  if (endpoint === 'dsh-codex-style-worktree/list') return { ok: true, value: listValue() }
+  if (endpoint === 'dsh-codex-style-worktree/prune') return { ok: true, value: { removed: [{ path: '/repo/x', sessionId: 's9' }], snapshots: [] } }
+  if (endpoint === 'dsh-codex-style-worktree/clean') {
     if (cleanBehavior.nextError) {
       const error = cleanBehavior.nextError
       cleanBehavior.nextError = null
@@ -563,7 +563,7 @@ function defaultHandler(endpoint, payload) {
     }
     return { ok: true, value: { removed: true, path: '/repo/.agents/worktrees/wt-abc', branchDeleted: false } }
   }
-  if (endpoint === 'dsh-codex-worktree/restore') {
+  if (endpoint === 'dsh-codex-style-worktree/restore') {
     if (restoreBehavior.nextError) {
       const error = restoreBehavior.nextError
       restoreBehavior.nextError = null
@@ -574,7 +574,7 @@ function defaultHandler(endpoint, payload) {
       value: { ref: payload.ref, path: '/repo/.agents/worktrees/wt-restored', commit: 'deadbeefcafe0123', repoRoot: '/repo' },
     }
   }
-  if (endpoint === 'dsh-codex-worktree/settings') {
+  if (endpoint === 'dsh-codex-style-worktree/settings') {
     if (payload.action === 'get') {
       if (settingsBehavior.getError) return { ok: false, error: settingsBehavior.getError }
       return { ok: true, value: settingsDescriptor() }
@@ -650,15 +650,15 @@ async function render(entry, props, scopeName) {
   return mount(h(entry.component, withInjected(entry, props)), scopeName)
 }
 function callsFor(endpoint) {
-  return calls.filter((call) => call.endpoint === `dsh-codex-worktree/${endpoint}`)
+  return calls.filter((call) => call.endpoint === `dsh-codex-style-worktree/${endpoint}`)
 }
 
 async function main() {
   /* ---------------- module shape ---------------- */
   check('registers with __ModuleLoader__', loaderDefinition !== null)
-  check('loader id is the package name', loaderDefinition?.id === 'dsh-codex-worktree', String(loaderDefinition?.id))
+  check('loader id is the package name', loaderDefinition?.id === 'dsh-codex-style-worktree', String(loaderDefinition?.id))
   check('factory returns the plugin object', plugin !== null && typeof plugin === 'object')
-  check('plugin name matches', plugin.name === 'dsh-codex-worktree', String(plugin.name))
+  check('plugin name matches', plugin.name === 'dsh-codex-style-worktree', String(plugin.name))
   check(
     'plugin injects slots/connection/locale/workspaces/sessions',
     Array.isArray(plugin.inject) && ['slots', 'connection', 'locale', 'workspaces', 'sessions'].every((name) => plugin.inject.includes(name)),
@@ -669,8 +669,8 @@ async function main() {
   plugin.apply(ctx)
 
   check('mounts one <style> element', styleNodes.length === 1, String(styleNodes.length))
-  check('style uses the renamed attribute', Boolean(styleNodes[0]?.attributes['data-dsh-codex-worktree-style'] !== undefined))
-  check('locale namespace registered', localeRegistrations.some((entry) => entry.namespace === 'dsh-codex-worktree'))
+  check('style uses the renamed attribute', Boolean(styleNodes[0]?.attributes['data-dsh-codex-style-worktree-style'] !== undefined))
+  check('locale namespace registered', localeRegistrations.some((entry) => entry.namespace === 'dsh-codex-style-worktree'))
   const dictionaries = localeRegistrations[0]?.dictionaries ?? {}
   check('zh dictionaries registered', Boolean(dictionaries.zh))
   check('en dictionaries registered', Boolean(dictionaries.en))
@@ -680,11 +680,11 @@ async function main() {
 
   /* ---------------- slot registrations ---------------- */
   const expectedSlots = [
-    ['conversation.hero.options', 'dsh-codex-worktree-placement', 10],
-    ['conversation.input.dock', 'dsh-codex-worktree-progress', 30],
-    ['sidebar.session.row.leading', 'dsh-codex-worktree-marker', 20],
-    ['conversation.session.header.utilities', 'dsh-codex-worktree-chip', -20],
-    ['settings.section', 'dsh-codex-worktree', 40],
+    ['conversation.hero.options', 'dsh-codex-style-worktree-placement', 10],
+    ['conversation.input.dock', 'dsh-codex-style-worktree-progress', 30],
+    ['sidebar.session.row.leading', 'dsh-codex-style-worktree-marker', 20],
+    ['conversation.session.header.utilities', 'dsh-codex-style-worktree-chip', -20],
+    ['settings.section', 'dsh-codex-style-worktree', 40],
   ]
   check('registers exactly five slot entries', registrations.length === 5, String(registrations.length))
   for (const [slot, id, order] of expectedSlots) {
@@ -692,11 +692,11 @@ async function main() {
     check(`slot ${slot} registered`, Boolean(entry))
     check(`slot ${slot} id is ${id}`, entry?.options?.id === id, String(entry?.options?.id))
     check(`slot ${slot} order is ${order}`, entry?.options?.order === order, String(entry?.options?.order))
-    check(`slot ${slot} locale is the renamed namespace`, entry?.options?.locale === 'dsh-codex-worktree')
+    check(`slot ${slot} locale is the renamed namespace`, entry?.options?.locale === 'dsh-codex-style-worktree')
   }
 
   check('source has no setInterval', !/setInterval/.test(source))
-  check('source no longer uses a create endpoint', !/dsh-codex-worktree\/create/.test(source))
+  check('source no longer uses a create endpoint', !/dsh-codex-style-worktree\/create/.test(source))
   check('source no longer creates Workspaces', !/workspaces\.create/.test(source))
 
   /* ================================================================ *
@@ -720,7 +720,7 @@ async function main() {
   const placementProps = (sessionId) => Object.assign({ sessionId }, sessionHookProps)
 
   let placementTree = await render(placementEntry, placementProps('s-placement'), 'placement-initial')
-  let pill = findAll(placementTree, (node) => node.props && node.props['data-dsh-codex-worktree-placement'] !== undefined)[0]
+  let pill = findAll(placementTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-placement'] !== undefined)[0]
   check('placement pill renders for a selected Git Workspace', Boolean(pill))
   check('placement pill starts on the default worktree mode', pill ? textOf(pill).indexOf('New local worktree') !== -1 : false, pill ? textOf(pill) : '')
   check('placement pill advertises its menu', pill?.props['aria-haspopup'] === 'menu')
@@ -743,7 +743,7 @@ async function main() {
   check('placement SET payload is {workspacePath, mode:local}', placementWrites[0]?.payload.workspacePath === '/repo' && placementWrites[0]?.payload.mode === 'local', JSON.stringify(placementWrites[0]?.payload))
 
   const afterPickTree = await render(placementEntry, placementProps('s-placement'), 'placement-initial')
-  const afterPickPill = findAll(afterPickTree, (node) => node.props && node.props['data-dsh-codex-worktree-placement'] !== undefined)[0]
+  const afterPickPill = findAll(afterPickTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-placement'] !== undefined)[0]
   check('placement pill reflects the chosen mode', afterPickPill ? textOf(afterPickPill).indexOf('Local') !== -1 : false, afterPickPill ? textOf(afterPickPill) : '')
 
   placementBehavior.isGit = false
@@ -758,20 +758,20 @@ async function main() {
   check('placement hidden for a non-blank Session', notBlankTree === null)
 
   const fallbackPathTree = await render(placementEntry, placementProps('s-placement-workspace'), 'placement-workspace-fallback')
-  const fallbackPill = findAll(fallbackPathTree, (node) => node.props && node.props['data-dsh-codex-worktree-placement'] !== undefined)[0]
+  const fallbackPill = findAll(fallbackPathTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-placement'] !== undefined)[0]
   check('placement falls back to the Workspace path when the Session has no cwd', Boolean(fallbackPill))
   check('placement fallback path is used by the GET', callsFor('placement').some((call) => call.payload.workspacePath === '/repo-ws' && call.payload.mode === undefined))
 
   placementBehavior.respond = () => ({ ok: false, error: { code: 'bad-request', message: 'placement failed', details: {} } })
   const failureTree = await render(placementEntry, placementProps('s-placement-fail'), 'placement-failure')
-  const failurePill = findAll(failureTree, (node) => node.props && node.props['data-dsh-codex-worktree-placement'] !== undefined)[0]
+  const failurePill = findAll(failureTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-placement'] !== undefined)[0]
   check('placement degrades to a read-only fallback on RPC failure', Boolean(failurePill) && failurePill.props.disabled === true)
   check('placement fallback shows the default mode', failurePill ? textOf(failurePill).indexOf('New local worktree') !== -1 : false)
   placementBehavior.respond = null
 
   placementBehavior.respond = (workspacePath) => ({ ok: true, value: { workspacePath, mode: 'local', defaultMode: 'local', isGit: true } })
   const localDefaultTree = await render(placementEntry, placementProps('s-placement-local'), 'placement-local-default')
-  const localDefaultPill = findAll(localDefaultTree, (node) => node.props && node.props['data-dsh-codex-worktree-placement'] !== undefined)[0]
+  const localDefaultPill = findAll(localDefaultTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-placement'] !== undefined)[0]
   check('placement renders the sticky local mode', localDefaultPill ? textOf(localDefaultPill).indexOf('Local') !== -1 : false)
   placementBehavior.respond = null
 
@@ -875,7 +875,7 @@ async function main() {
   const markerEntry = entryOf('sidebar.session.row.leading')
   setProjection('s-marker', projection('ready', null))
   let markerTree = await render(markerEntry, { sessionId: 's-marker' }, 'marker-ready')
-  const marker = findAll(markerTree, (node) => node.props && node.props['data-dsh-codex-worktree-marker'] !== undefined)[0]
+  const marker = findAll(markerTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-marker'] !== undefined)[0]
   check('marker renders for a ready projection', Boolean(marker))
   check('marker is not a button', marker?.type !== 'button')
   check('marker has no click handler', !marker?.props.onClick)
@@ -897,7 +897,7 @@ async function main() {
   const chipEntry = entryOf('conversation.session.header.utilities')
   setProjection('s-chip', projection('ready', null, { branch: 'wt/login' }))
   const chipTree = await render(chipEntry, { sessionId: 's-chip' }, 'chip-ready')
-  const chip = findAll(chipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0]
+  const chip = findAll(chipTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-chip'] !== undefined)[0]
   check('chip renders for a ready projection', Boolean(chip))
   check('chip shows the branch name', chip ? textOf(chip).indexOf('wt/login') !== -1 : false, chip ? textOf(chip) : '')
   check('chip base state needs no status RPC', callsFor('status').length === 0, String(callsFor('status').length))
@@ -905,7 +905,7 @@ async function main() {
   chip.props.onClick()
   const chipPopoverTree = await render(chipEntry, { sessionId: 's-chip' }, 'chip-ready')
   await render(chipEntry, { sessionId: 's-chip' }, 'chip-ready')
-  const popover = findAll(chipPopoverTree, (node) => node.props && node.props['data-dsh-codex-worktree-popover'] !== undefined)[0] || findAll(await render(chipEntry, { sessionId: 's-chip' }, 'chip-ready'), (node) => node.props && node.props['data-dsh-codex-worktree-popover'] !== undefined)[0]
+  const popover = findAll(chipPopoverTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-popover'] !== undefined)[0] || findAll(await render(chipEntry, { sessionId: 's-chip' }, 'chip-ready'), (node) => node.props && node.props['data-dsh-codex-style-worktree-popover'] !== undefined)[0]
   check('chip popover opens', Boolean(popover))
   const statusCalls = callsFor('status')
   check('opening the popover reads status once', statusCalls.length === 1, String(statusCalls.length))
@@ -914,23 +914,23 @@ async function main() {
 
   setProjection('s-chip-null', null)
   const unmanagedTree = await render(chipEntry, { sessionId: 's-chip-null' }, 'chip-null')
-  const unmanagedChip = findAll(unmanagedTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0]
+  const unmanagedChip = findAll(unmanagedTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-chip'] !== undefined)[0]
   check('chip shows 未托管 without a projection', unmanagedChip ? textOf(unmanagedChip).indexOf('No worktree') !== -1 : false, unmanagedChip ? textOf(unmanagedChip) : '')
 
   setProjection('s-chip-creating', projection('creating', 'prepare'))
   const creatingChipTree = await render(chipEntry, { sessionId: 's-chip-creating' }, 'chip-creating')
-  const creatingChip = findAll(creatingChipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0]
+  const creatingChip = findAll(creatingChipTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-chip'] !== undefined)[0]
   check('chip shows the loading state while creating', creatingChip ? textOf(creatingChip).indexOf('Checking') !== -1 : false, creatingChip ? textOf(creatingChip) : '')
 
   setProjection('s-chip-error', projection('error', null, { error: 'limit-reached' }))
   const errorChipTree = await render(chipEntry, { sessionId: 's-chip-error' }, 'chip-error')
-  const errorChip = findAll(errorChipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0]
+  const errorChip = findAll(errorChipTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-chip'] !== undefined)[0]
   check('chip shows the error state', errorChip ? textOf(errorChip).indexOf('Status unknown') !== -1 : false, errorChip ? textOf(errorChip) : '')
 
   // ---- worktree-in-use: chip popover → force retry ----
   setProjection('s-chip-in-use', projection('ready', null, { branch: 'wt/in-use' }))
   let inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
-  findAll(inUseChipTree, (node) => node.props && node.props['data-dsh-codex-worktree-chip'] !== undefined)[0].props.onClick()
+  findAll(inUseChipTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-chip'] !== undefined)[0].props.onClick()
   inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
   await flush()
   inUseChipTree = await render(chipEntry, { sessionId: 's-chip-in-use' }, 'chip-in-use')
@@ -1057,7 +1057,7 @@ async function main() {
   // ---- recoverable snapshots (v0.4.0) ----
   settingsTree = await render(settingsEntry, settingsProps, 'settings-config')
   settingsText = textOf(settingsTree)
-  check('snapshots block renders under its repository', Boolean(findAll(settingsTree, (node) => node.props && node.props['data-dsh-codex-worktree-snapshots'] !== undefined)[0]))
+  check('snapshots block renders under its repository', Boolean(findAll(settingsTree, (node) => node.props && node.props['data-dsh-codex-style-worktree-snapshots'] !== undefined)[0]))
   check('snapshots block shows the title', settingsText.indexOf('Recoverable snapshots') !== -1)
   check('snapshots block shows the count', settingsText.indexOf('2 snapshots') !== -1)
   check('snapshot ref tail rendered', settingsText.indexOf('\u2026/wt-2026-10-19-4f2a') !== -1, settingsText.slice(0, 300))
@@ -1074,7 +1074,7 @@ async function main() {
   await render(settingsEntry, settingsProps, 'settings-config')
   const restoreCalls = callsFor('restore')
   check('restore calls the restore endpoint once', restoreCalls.length === 1, String(restoreCalls.length))
-  check('restore payload is {ref}', JSON.stringify(restoreCalls[0]?.payload) === JSON.stringify({ ref: 'refs/dsh-codex-worktree/wt-2026-10-19-4f2a' }), JSON.stringify(restoreCalls[0]?.payload))
+  check('restore payload is {ref}', JSON.stringify(restoreCalls[0]?.payload) === JSON.stringify({ ref: 'refs/dsh-codex-style-worktree/wt-2026-10-19-4f2a' }), JSON.stringify(restoreCalls[0]?.payload))
   const afterRestoreTree = await render(settingsEntry, settingsProps, 'settings-config')
   check('restore reports the restored path', textOf(afterRestoreTree).indexOf('Restored to /repo/.agents/worktrees/wt-restored') !== -1, textOf(afterRestoreTree).slice(0, 300))
   check('restore refreshes the worktree list', callsFor('list').length > listCallsBeforeRestore, `${listCallsBeforeRestore} -> ${callsFor('list').length}`)
@@ -1118,7 +1118,7 @@ async function main() {
   check('every RPC uses the /api channel', calls.every((call) => call.channel === '/api'), JSON.stringify(calls.slice(0, 3)))
   check(
     'every RPC endpoint carries the renamed namespace',
-    calls.every((call) => /^dsh-codex-worktree\/(status|clean|list|prune|placement|settings|restore)$/.test(call.endpoint)),
+    calls.every((call) => /^dsh-codex-style-worktree\/(status|clean|list|prune|placement|settings|restore)$/.test(call.endpoint)),
     JSON.stringify([...new Set(calls.map((call) => call.endpoint))]),
   )
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Install dsh-codex-worktree into a DSH profile (direct-install path).
+ * Install dsh-codex-style-worktree into a DSH profile (direct-install path).
  *
  * What it does
  *   1. copies package.json, cordis.patch.yml, README*.md, lib/** and client/**
- *      into <profile>/node_modules/dsh-codex-worktree/ (client/ and lib/ are
+ *      into <profile>/node_modules/dsh-codex-style-worktree/ (client/ and lib/ are
  *      copied recursively; a missing half aborts the install);
  *   2. runs `node --check` on every .js file in the staged copy *before*
  *      publishing it, so a broken copy can never reach the live profile;
@@ -39,7 +39,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const PACKAGE_NAME = 'dsh-codex-worktree';
+const PACKAGE_NAME = 'dsh-codex-style-worktree';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const markerStart = `# >>> ${PACKAGE_NAME} >>>`;
 const markerEnd = `# <<< ${PACKAGE_NAME} <<<`;

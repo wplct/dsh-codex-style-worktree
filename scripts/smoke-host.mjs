@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
 
 const here = new URL('..', import.meta.url).pathname
-const workspace = await mkdtemp(join(tmpdir(), 'dsh-codex-worktree-smoke-'))
+const workspace = await mkdtemp(join(tmpdir(), 'dsh-codex-style-worktree-smoke-'))
 const pluginDir = join(workspace, 'plugin')
 const stubs = join(workspace, 'node_modules', '@deepseek-ai')
 
@@ -170,7 +170,7 @@ export default z
     skipChildAgents: true,
     skipSessionIdPatterns: ['^session-taskboard-'],
     skipPresets: [],
-    disableMarker: '.dsh-codex-worktree-off',
+    disableMarker: '.dsh-codex-style-worktree-off',
     maxPerRepo: 32,
     noticeOnCreate: false,
   }
@@ -287,7 +287,7 @@ export default z
   await mkdir(dshHome, { recursive: true })
   process.env.DSH_HOME = dshHome
   const mod = await import(pathToFileURL(join(pluginDir, 'lib', 'index.js')).href)
-  check('module exports name', mod.name === 'dsh-codex-worktree', String(mod.name))
+  check('module exports name', mod.name === 'dsh-codex-style-worktree', String(mod.name))
   check('module exports apply', typeof mod.apply === 'function')
   check('module exports Config', mod.Config !== undefined)
   check('module exports required injects', Array.isArray(mod.inject) && mod.inject.includes('agents'))
@@ -310,7 +310,7 @@ export default z
   for (const endpoint of expectedEndpoints) {
     check(
       `${endpoint} route path registered`,
-      captured.routes.some((route) => route.path === `/api/dsh-codex-worktree/${endpoint}`),
+      captured.routes.some((route) => route.path === `/api/dsh-codex-style-worktree/${endpoint}`),
     )
   }
   check('no create route', !captured.routes.some((route) => route.path.endsWith('/create')))
@@ -362,10 +362,10 @@ export default z
 
   // ---- 5. Drive the client routes through the envelope -------------------
   const call = async (endpoint, payload, rpcId = `rpc-${endpoint}`) => {
-    const route = captured.routes.find((candidate) => candidate.path === `/api/dsh-codex-worktree/${endpoint}`)
+    const route = captured.routes.find((candidate) => candidate.path === `/api/dsh-codex-style-worktree/${endpoint}`)
     const response = await route.fetch({
       headers: { get: () => 'application/json', },
-      json: async () => ({ rpcId, method: `dsh-codex-worktree/${endpoint}`, payload }),
+      json: async () => ({ rpcId, method: `dsh-codex-style-worktree/${endpoint}`, payload }),
     })
     return (await response.json()).result
   }
@@ -436,7 +436,7 @@ export default z
   check('plugin created no branch', git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads']).split('\n').filter((line) => line.length > 0).length === 1, git(repo, ['branch']))
 
   // ---- 7. Removal is guarded, snapshotted and restorable -----------------
-  const before = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
+  const before = JSON.parse(await readFile(join(dshHome, 'dsh-codex-style-worktree', 'state.json'), 'utf8'))
   check('sidecar is schema v3', before.schemaVersion === 3, String(before.schemaVersion))
   check('sidecar keeps the session record', before.records['session-smoke']?.path === cwd)
   check('sidecar keeps the workspace placement', Object.values(before.placements)[0]?.mode === 'local', JSON.stringify(before.placements))
@@ -448,7 +448,7 @@ export default z
   check('forced clean removes the checkout', cleaned?.ok === true && cleaned.value.removed === true, JSON.stringify(cleaned).slice(0, 300))
   check('forced clean saved the detached commits as a snapshot', cleaned?.value?.snapshots?.length === 1, JSON.stringify(cleaned?.value?.snapshots))
   const snapshot = cleaned.value.snapshots[0]
-  check('snapshot ref lives under refs/dsh-codex-worktree', String(snapshot.ref).startsWith('refs/dsh-codex-worktree/'), String(snapshot.ref))
+  check('snapshot ref lives under refs/dsh-codex-style-worktree', String(snapshot.ref).startsWith('refs/dsh-codex-style-worktree/'), String(snapshot.ref))
   check('snapshot points at the detached HEAD', snapshot.commit === detachedHead, `${snapshot.commit} !== ${detachedHead}`)
 
   const listAfter = await call('list', {})
@@ -464,10 +464,10 @@ export default z
   check('restore recreates a checkout from the snapshot', restored?.ok === true && typeof restored.value.path === 'string', JSON.stringify(restored).slice(0, 300))
   check('restored checkout is on the saved commit', git(restored.value.path, ['rev-parse', 'HEAD']) === detachedHead)
   check('restored checkout carries the committed file', (await readFile(join(restored.value.path, 'b.txt'), 'utf8')).trim() === 'b')
-  const missing = await call('restore', { ref: 'refs/dsh-codex-worktree/missing' })
+  const missing = await call('restore', { ref: 'refs/dsh-codex-style-worktree/missing' })
   check('unknown snapshot maps to snapshot-not-found', missing?.error?.code === 'snapshot-not-found', JSON.stringify(missing).slice(0, 300))
 
-  const after = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
+  const after = JSON.parse(await readFile(join(dshHome, 'dsh-codex-style-worktree', 'state.json'), 'utf8'))
   check('sidecar records the snapshot after the clean', after.snapshots?.[snapshot.ref]?.commit === detachedHead, JSON.stringify(after.snapshots))
   check('sidecar marks the snapshot as restored', typeof after.snapshots?.[snapshot.ref]?.restoredPath === 'string', JSON.stringify(after.snapshots))
 } finally {
