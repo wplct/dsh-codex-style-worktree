@@ -1,5 +1,7 @@
 # Codex-style Worktree (dsh-codex-style-worktree)
 
+**English** | [简体中文](README.zh.md)
+
 > A "work like Codex" placement choice for DSH sessions: on the new-session hero row, pick **Local** or **New local worktree** (the default) next to the workspace chip; after you send the first message the plugin creates a detached checkout and switches **that session's** cwd into it. No new Workspace, no naming, no branch from the plugin (Git owns branch naming at commit time).
 
 - Version: `0.5.0` (2026-10-20; package / plugin id / loader row name: `dsh-codex-style-worktree`; profile-patch insert row id: `codex-worktree`)

@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex-style-worktree",
   "version": "0.5.0",
-  "description": "Codex 风格 Worktree：在新会话首行按工作区选择「本地」或「新建本地工作树」（默认），发送第一条消息后自动创建 detached 检出，三步进度通过会话投影实时显示在输入框上方的进度卡里，侧边栏只给托管会话加一个静态图标；不新增 Workspace、不需要命名、分支由 Git 在提交时决定。清理有保护：正被其他活跃会话使用的检出会拒绝删除（可强制覆盖），删除前把 detached 提交存成可恢复的快照 ref（/wt-snapshots、/wt-restore），可选的 cleanupOnArchive 会在会话归档后清理干净且未被使用的检出。所有设置项都能在设置页在线修改并热生效。",
+  "description": "Codex 风格 Worktree：新建会话时在工作区旁选择「本地」或「新建本地工作树」，发送首条消息后自动创建独立检出并在输入框上方显示进度，侧边栏标记托管会话；清理有保护、删除前留可恢复快照，所有配置都能在设置页在线修改。",
   "license": "MIT",
   "author": "wplct",
   "keywords": [

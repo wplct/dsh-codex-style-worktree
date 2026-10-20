@@ -1,5 +1,7 @@
 # Codex 风格 Worktree（dsh-codex-style-worktree）
 
+[English](README.md) | **简体中文**
+
 > 给 DSH 会话一个「像 Codex 一样」的工作位置选择：新会话首屏在工作区旁边选 **本地** 还是 **新建本地工作树**（默认）；发送第一条消息后自动建一个 detached 检出并把**本次会话**的 cwd 切进去。不新增 Workspace、不需要命名、插件不建分支（分支名由 Git 在提交时决定）。
 
 - 版本：`0.5.0`（2026-10-20；包 / 插件 id / loader row name：`dsh-codex-style-worktree`；profile patch 里的 insert row id：`codex-worktree`）
