@@ -1,15 +1,24 @@
 /**
- * dsh-codex-worktree — browser half (DSH Web GUI). Display title:
+ * dsh-codex-worktree — browser half (DSH Web GUI) for 0.3.0. Display title:
  * "Codex 风格 Worktree" / "Codex-style Worktree".
  *
- * Registers three surfaces:
- *   1. `conversation.session.header.utilities` — a chip for the current Session's
- *      automatically created Git worktree (`wt:<name>` / branch), with a popover
- *      that shows the worktree facts and offers "clean up".
- *   2. `conversation.input.dock` — a "新建 Worktree / New worktree" button above the
- *      composer for a blank Session whose Workspace is not itself a worktree.
- *   3. `settings.section` — a management page listing every recorded worktree with
- *      refresh, prune and per-row actions.
+ * Registers five surfaces:
+ *   1. `conversation.hero.options` — the work-location selector
+ *      (本地 / 新建本地工作树) on the blank-session hero row. The choice is sticky
+ *      per Workspace through the `placement` RPC.
+ *   2. `conversation.input.dock` — an inline creation-progress card above the
+ *      composer, driven by the `codexWorktree` Session projection (no polling).
+ *   3. `sidebar.session.row.leading` — a read-only marker for Sessions whose
+ *      projection is `ready` (icon + tooltip; never clickable).
+ *   4. `conversation.session.header.utilities` — the Session chip. Its base state
+ *      comes from the projection; the popover reads details with one `status` RPC.
+ *   5. `settings.section` — editable configuration form (`settings` RPC) plus the
+ *      worktree management list (`list` / `clean` / `prune`).
+ *
+ * All state sync is event-driven: Session projections come from
+ * `sessions.list.getSnapshot().byId[id].projectionValues.codexWorktree` and its
+ * list subscription. Nothing polls; `setTimeout` is used only for the
+ * progress card's minimum display time, its fade-out and transient notes.
  *
  * The browser artifact is a lazy factory whose id equals the package name
  * (`dsh-codex-worktree`). React comes from the browser module table, so `react` is
@@ -41,13 +50,16 @@ window.__ModuleLoader__.load({
     var API_PREFIX = '/api/dsh-codex-worktree'
     /** RPC method prefix the connection layer derives from API_PREFIX. */
     var RPC_NAMESPACE = 'dsh-codex-worktree'
+    /** Settings namespace the host exposes through the `settings` endpoint. */
+    var SETTINGS_NS = 'codex-worktree'
     /**
      * RPC endpoints registered by the host half.
      *
-     * `status`/`clean`/`list`/`prune` drive the Session chip and the management page;
-     * `create` backs the composer dock button.
+     * There is no `create` and no `cancel`: worktrees are created only by the
+     * host's `agent/created` hook, and the progress card's cancel is a
+     * client-side hide. Placement and settings back the new 0.3.0 surfaces.
      */
-    var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'create']
+    var ENDPOINTS = ['status', 'clean', 'list', 'prune', 'placement', 'settings']
 
     /**
      * `connection.rpc.call(channel, endpoint, payload, signal)` is the DSH wire
@@ -62,7 +74,9 @@ window.__ModuleLoader__.load({
     var STYLE_ATTR = 'data-dsh-codex-worktree-style'
     var CHIP_ID = 'dsh-codex-worktree-chip'
     var SECTION_ID = 'dsh-codex-worktree'
-    var DOCK_ID = 'dsh-codex-worktree-new'
+    var PLACEMENT_ID = 'dsh-codex-worktree-placement'
+    var PROGRESS_ID = 'dsh-codex-worktree-progress'
+    var MARKER_ID = 'dsh-codex-worktree-marker'
 
     /* ================================================================== *
      * 2. Locale                                                           *
@@ -87,7 +101,6 @@ window.__ModuleLoader__.load({
       'popover.created': 'Created',
       'popover.none': '\u2014',
       'popover.unmanagedHint': 'This Session is not using an automatic worktree. Start a Session inside a Git repository to get one.',
-      'popover.errorState': 'Could not read the worktree status.',
       'popover.clean.action': 'Clean worktree',
       'popover.clean.confirm': 'Remove this worktree directory? The checkout is deleted from disk.',
       'popover.clean.confirmAction': 'Confirm cleanup',
@@ -107,21 +120,11 @@ window.__ModuleLoader__.load({
       'settings.count': '{count} worktrees',
       'settings.mode.detached': 'detached',
       'settings.mode.branch': 'branch',
-      'settings.confirmAction': 'Confirm',
       'settings.cancel': 'Cancel',
-      'settings.forceHint': 'This worktree has uncommitted changes; force cleanup discards them.',
-      'settings.deleteBranch': 'Also delete the branch',
       'settings.loadError': 'Failed to load records: {message}',
       'settings.rowError': 'Operation failed: {message}',
       'settings.noSession': 'This record has no Session id, so it cannot be managed from here.',
       'settings.unknown': 'unknown',
-      'settings.config.title': 'Configuration',
-      'settings.config.hint': 'Read-only here. Change these values in the profile cordis.patch.yml.',
-      'settings.config.root': 'Worktree root',
-      'settings.config.inRepo': 'inside the repository: {directory}',
-      'settings.config.fetchBeforeCreate': 'Always fetch upstream before creating a worktree',
-      'settings.config.autoPrune': 'Automatically delete old worktrees',
-      'settings.config.autoPruneKeep': 'keep {count}',
       'settings.config.on': 'On',
       'settings.config.off': 'Off',
       'settings.prune.action': 'Prune now',
@@ -135,8 +138,6 @@ window.__ModuleLoader__.load({
       'settings.dirty': '{count} uncommitted',
       'settings.noDirty': 'clean',
       'settings.created': 'Created {time}',
-      'settings.newChat': 'New chat here',
-      'settings.newChat.busy': 'Opening\u2026',
       'settings.delete': 'Delete',
       'settings.delete.confirm': 'Delete this worktree? Its checkout directory is removed from disk.',
       'settings.delete.confirmAction': 'Confirm delete',
@@ -145,18 +146,74 @@ window.__ModuleLoader__.load({
       'settings.deleted': 'Deleted {path}',
       'settings.conversations': 'Known conversations',
       'settings.openSession': 'Open conversation',
-      'settings.newChatFailed': 'Could not start a chat: {message}',
       'settings.openFailed': 'Could not open the conversation: {message}',
-      'settings.controllersUnavailable': 'This Client does not expose the Workspace/Session controllers.',
       'settings.rpcUnavailable': 'The host RPC connection is unavailable.',
-      'dock.new': 'New worktree',
-      'dock.new.busy': 'Creating\u2026',
-      'dock.new.show': 'Create a Codex-style worktree and open a new Session in it',
-      'dock.error.notGit': 'Not a Git repository',
-      'dock.error.noCommit': 'Repository has no commits',
-      'dock.error.disabled': 'Worktree disabled for this repository',
-      'dock.error.limitReached': 'Worktree limit reached',
-      'dock.error.noWorkspace': 'Could not find the Workspace of this Session.',
+      'placement.title': 'Work location',
+      'placement.worktree': 'New local worktree',
+      'placement.local': 'Local',
+      'placement.hint': 'Creating a local worktree does not add a Workspace; it only switches this Session\u2019s working directory.',
+      'placement.failed': 'Could not save the work location. It may be unavailable right now; sending still works.',
+      'progress.title': 'Creating worktree',
+      'progress.prepare': 'Prepare workspace',
+      'progress.checkout': 'Check out files',
+      'progress.finalize': 'Set up environment',
+      'progress.done': 'Worktree created',
+      'progress.cancel': 'Cancel',
+      'progress.failed': 'Could not create the worktree; the Session continues in the original directory.',
+      'progress.reason': 'Reason: {reason}',
+      'marker.title': 'Codex-style Worktree',
+      'marker.tooltip': '{title} \u00b7 {path}',
+      'settings.edit.title': 'Configuration',
+      'settings.edit.enabled': 'Automatic creation',
+      'settings.edit.enabled.desc': 'Create a worktree automatically after the first message.',
+      'settings.edit.defaultPlacement': 'Default work location',
+      'settings.edit.defaultPlacement.desc': 'Used for a Workspace that has no remembered choice yet.',
+      'settings.edit.directory': 'Checkout directory',
+      'settings.edit.directory.desc': 'Relative to the repository; no "." or ".." segments.',
+      'settings.edit.root': 'Worktree root directory',
+      'settings.edit.root.desc': 'Empty uses the in-repository directory; otherwise an absolute or repository-relative path without "..".',
+      'settings.edit.mode': 'Mode',
+      'settings.edit.mode.desc': 'Detached creates no branch (recommended); branch also creates one.',
+      'settings.edit.namePrefix': 'Name prefix',
+      'settings.edit.namePrefix.desc': 'Checkout directory prefix; no slashes and must not start with "-".',
+      'settings.edit.branchPrefix': 'Branch prefix',
+      'settings.edit.branchPrefix.desc': 'Branch name prefix; must not start with "-" or "/".',
+      'settings.edit.baseRef': 'Base ref',
+      'settings.edit.baseRef.desc': 'Local ref the checkout starts from; must not start with "-".',
+      'settings.edit.fetchBeforeCreate': 'Fetch upstream before creating a worktree',
+      'settings.edit.fetchBeforeCreate.desc': 'Failures only warn; creation continues with local refs.',
+      'settings.edit.autoPrune': 'Automatically delete old worktrees',
+      'settings.edit.autoPrune.desc': 'Delete worktrees beyond the keep limit while creating.',
+      'settings.edit.autoPruneKeep': 'Keep at most',
+      'settings.edit.autoPruneKeep.desc': 'Non-negative integer.',
+      'settings.edit.pruneGraceMs': 'Prune grace period (ms)',
+      'settings.edit.pruneGraceMs.desc': 'Non-negative integer; recently used worktrees are skipped.',
+      'settings.edit.poolGitignore': 'Add the pool directory to .gitignore',
+      'settings.edit.poolGitignore.desc': 'Keeps the checkout pool out of git status.',
+      'settings.edit.gitTimeoutMs': 'Git timeout (ms)',
+      'settings.edit.gitTimeoutMs.desc': 'Positive integer.',
+      'settings.edit.skipChildAgents': 'Skip subagents',
+      'settings.edit.skipChildAgents.desc': 'Subagent Sessions never get a worktree.',
+      'settings.edit.skipSessionIdPatterns': 'Skip Session ids matching',
+      'settings.edit.skipSessionIdPatterns.desc': 'One regular expression per line.',
+      'settings.edit.skipPresets': 'Skip presets matching',
+      'settings.edit.skipPresets.desc': 'One regular expression per line.',
+      'settings.edit.disableMarker': 'Disable marker file',
+      'settings.edit.disableMarker.desc': 'A plain file name (no slashes) that disables creation in a repository.',
+      'settings.edit.maxPerRepo': 'Maximum per repository',
+      'settings.edit.maxPerRepo.desc': 'Positive integer; creation is refused above it.',
+      'settings.edit.noticeOnCreate': 'Notify after creating',
+      'settings.edit.noticeOnCreate.desc': 'Post a short notice in the new Session.',
+      'settings.save': 'Save',
+      'settings.saving': 'Saving\u2026',
+      'settings.reset': 'Restore defaults',
+      'settings.saved': 'Saved',
+      'settings.dirty': 'Unsaved changes',
+      'settings.conflict': 'Configuration changed elsewhere. The form was refreshed with the latest values.',
+      'settings.invalid': 'Invalid value: {message}',
+      'settings.unavailable': 'Settings service unavailable. Change values in the profile cordis.patch.yml.',
+      'settings.readOnly': 'Read-only',
+      'settings.management.title': 'Worktree management',
     }
 
     var DICT_ZH = {
@@ -178,7 +235,6 @@ window.__ModuleLoader__.load({
       'popover.created': '\u521b\u5efa\u65f6\u95f4',
       'popover.none': '\u2014',
       'popover.unmanagedHint': '\u5f53\u524d\u4f1a\u8bdd\u672a\u4f7f\u7528\u81ea\u52a8 Worktree\u3002\u5728 Git \u4ed3\u5e93\u4e2d\u65b0\u5efa\u4f1a\u8bdd\u5373\u4f1a\u81ea\u52a8\u521b\u5efa\u3002',
-      'popover.errorState': '\u65e0\u6cd5\u8bfb\u53d6 Worktree \u72b6\u6001\u3002',
       'popover.clean.action': '\u6e05\u7406 Worktree',
       'popover.clean.confirm': '\u786e\u5b9a\u5220\u9664\u8fd9\u4e2a Worktree \u76ee\u5f55\uff1f\u5de5\u4f5c\u533a\u5c06\u4ece\u78c1\u76d8\u4e0a\u5220\u9664\u3002',
       'popover.clean.confirmAction': '\u786e\u8ba4\u6e05\u7406',
@@ -198,21 +254,11 @@ window.__ModuleLoader__.load({
       'settings.count': '{count} \u4e2a\u5de5\u4f5c\u6811',
       'settings.mode.detached': '\u6e38\u79bb',
       'settings.mode.branch': '\u5206\u652f',
-      'settings.confirmAction': '\u786e\u8ba4',
       'settings.cancel': '\u53d6\u6d88',
-      'settings.forceHint': '\u8be5 Worktree \u6709\u672a\u63d0\u4ea4\u7684\u6539\u52a8\uff0c\u5f3a\u5236\u6e05\u7406\u4f1a\u4e22\u5f03\u5b83\u4eec\u3002',
-      'settings.deleteBranch': '\u540c\u65f6\u5220\u9664\u5206\u652f',
       'settings.loadError': '\u8bfb\u53d6\u8bb0\u5f55\u5931\u8d25\uff1a{message}',
       'settings.rowError': '\u64cd\u4f5c\u5931\u8d25\uff1a{message}',
       'settings.noSession': '\u8be5\u8bb0\u5f55\u7f3a\u5c11\u4f1a\u8bdd ID\uff0c\u65e0\u6cd5\u5728\u6b64\u7ba1\u7406\u3002',
       'settings.unknown': '\u672a\u77e5',
-      'settings.config.title': '\u914d\u7f6e',
-      'settings.config.hint': '\u6b64\u5904\u4ec5\u4f9b\u67e5\u770b\uff0c\u8bf7\u5728 profile \u7684 cordis.patch.yml \u4e2d\u4fee\u6539\u3002',
-      'settings.config.root': '\u5de5\u4f5c\u6811\u6839\u76ee\u5f55',
-      'settings.config.inRepo': '\u4ed3\u5e93\u5185\uff1a{directory}',
-      'settings.config.fetchBeforeCreate': '\u521b\u5efa\u5de5\u4f5c\u6811\u524d\u59cb\u7ec8\u83b7\u53d6\u4e0a\u6e38\u66f4\u65b0',
-      'settings.config.autoPrune': '\u81ea\u52a8\u5220\u9664\u65e7\u5de5\u4f5c\u6811',
-      'settings.config.autoPruneKeep': '\u4fdd\u7559 {count} \u4e2a',
       'settings.config.on': '\u5f00',
       'settings.config.off': '\u5173',
       'settings.prune.action': '\u7acb\u5373\u6e05\u7406',
@@ -226,8 +272,6 @@ window.__ModuleLoader__.load({
       'settings.dirty': '{count} \u4e2a\u672a\u63d0\u4ea4',
       'settings.noDirty': '\u5e72\u51c0',
       'settings.created': '\u521b\u5efa\u4e8e {time}',
-      'settings.newChat': '\u5728\u6b64\u5de5\u4f5c\u6811\u4e2d\u65b0\u5efa\u804a\u5929',
-      'settings.newChat.busy': '\u6b63\u5728\u6253\u5f00\u2026',
       'settings.delete': '\u5220\u9664',
       'settings.delete.confirm': '\u5220\u9664\u8fd9\u4e2a\u5de5\u4f5c\u6811\uff1f\u5de5\u4f5c\u533a\u76ee\u5f55\u5c06\u4ece\u78c1\u76d8\u4e0a\u79fb\u9664\u3002',
       'settings.delete.confirmAction': '\u786e\u8ba4\u5220\u9664',
@@ -236,18 +280,74 @@ window.__ModuleLoader__.load({
       'settings.deleted': '\u5df2\u5220\u9664 {path}',
       'settings.conversations': '\u5df2\u77e5\u5bf9\u8bdd',
       'settings.openSession': '\u6253\u5f00\u5bf9\u8bdd',
-      'settings.newChatFailed': '\u65e0\u6cd5\u65b0\u5efa\u804a\u5929\uff1a{message}',
       'settings.openFailed': '\u65e0\u6cd5\u6253\u5f00\u5bf9\u8bdd\uff1a{message}',
-      'settings.controllersUnavailable': '\u5f53\u524d\u5ba2\u6237\u7aef\u672a\u63d0\u4f9b Workspace/Session \u63a7\u5236\u5668\u3002',
       'settings.rpcUnavailable': '\u4e3b\u673a RPC \u8fde\u63a5\u4e0d\u53ef\u7528\u3002',
-      'dock.new': '\u65b0\u5efa Worktree',
-      'dock.new.busy': '\u521b\u5efa\u4e2d\u2026',
-      'dock.new.show': '\u521b\u5efa\u4e00\u4e2a Codex \u98ce\u683c Worktree \u5e76\u5728\u5176\u4e2d\u6253\u5f00\u65b0\u4f1a\u8bdd',
-      'dock.error.notGit': '\u5f53\u524d\u5de5\u4f5c\u533a\u4e0d\u662f Git \u4ed3\u5e93',
-      'dock.error.noCommit': '\u4ed3\u5e93\u8fd8\u6ca1\u6709\u4efb\u4f55\u63d0\u4ea4',
-      'dock.error.disabled': '\u8be5\u4ed3\u5e93\u5df2\u5173\u95ed\u81ea\u52a8 Worktree',
-      'dock.error.limitReached': '\u5df2\u8fbe\u5230\u8be5\u4ed3\u5e93\u7684 Worktree \u4e0a\u9650',
-      'dock.error.noWorkspace': '\u672a\u627e\u5230\u5f53\u524d\u4f1a\u8bdd\u7684\u5de5\u4f5c\u533a\u3002',
+      'placement.title': '\u5de5\u4f5c\u4f4d\u7f6e',
+      'placement.worktree': '\u65b0\u5efa\u672c\u5730\u5de5\u4f5c\u6811',
+      'placement.local': '\u672c\u5730',
+      'placement.hint': '\u65b0\u5efa\u672c\u5730\u5de5\u4f5c\u6811\u4e0d\u4f1a\u65b0\u589e\u5de5\u4f5c\u533a\uff0c\u53ea\u5207\u6362\u672c\u6b21\u4f1a\u8bdd\u7684\u5de5\u4f5c\u76ee\u5f55\u3002',
+      'placement.failed': '\u65e0\u6cd5\u4fdd\u5b58\u5de5\u4f5c\u4f4d\u7f6e\uff0c\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u4ecd\u53ef\u4ee5\u6b63\u5e38\u53d1\u9001\u6d88\u606f\u3002',
+      'progress.title': '\u6b63\u5728\u521b\u5efa\u5de5\u4f5c\u6811',
+      'progress.prepare': '\u51c6\u5907\u5de5\u4f5c\u7a7a\u95f4',
+      'progress.checkout': '\u68c0\u51fa\u6587\u4ef6',
+      'progress.finalize': '\u8bbe\u7f6e\u73af\u5883',
+      'progress.done': '\u5df2\u521b\u5efa\u5de5\u4f5c\u6811',
+      'progress.cancel': '\u53d6\u6d88',
+      'progress.failed': '\u521b\u5efa\u5de5\u4f5c\u6811\u5931\u8d25\uff0c\u4f1a\u8bdd\u7ee7\u7eed\u5728\u539f\u76ee\u5f55\u4e2d\u8fd0\u884c\u3002',
+      'progress.reason': '\u539f\u56e0\uff1a{reason}',
+      'marker.title': 'Codex \u98ce\u683c Worktree',
+      'marker.tooltip': '{title} \u00b7 {path}',
+      'settings.edit.title': '\u914d\u7f6e',
+      'settings.edit.enabled': '\u81ea\u52a8\u521b\u5efa',
+      'settings.edit.enabled.desc': '\u9996\u6761\u6d88\u606f\u540e\u81ea\u52a8\u521b\u5efa\u5de5\u4f5c\u6811\u3002',
+      'settings.edit.defaultPlacement': '\u9ed8\u8ba4\u5de5\u4f5c\u4f4d\u7f6e',
+      'settings.edit.defaultPlacement.desc': '\u5c1a\u672a\u8bb0\u4f4f\u9009\u62e9\u7684\u5de5\u4f5c\u533a\u4f7f\u7528\u6b64\u503c\u3002',
+      'settings.edit.directory': '\u68c0\u51fa\u76ee\u5f55',
+      'settings.edit.directory.desc': '\u76f8\u5bf9\u4e8e\u4ed3\u5e93\uff1b\u4e0d\u80fd\u542b "." \u6216 ".." \u6bb5\u3002',
+      'settings.edit.root': '\u5de5\u4f5c\u6811\u6839\u76ee\u5f55',
+      'settings.edit.root.desc': '\u7a7a\u8868\u793a\u4ed3\u5e93\u5185\u76ee\u5f55\uff1b\u5426\u5219\u4e3a\u7edd\u5bf9\u8def\u5f84\u6216\u4ed3\u5e93\u76f8\u5bf9\u8def\u5f84\uff0c\u4e0d\u80fd\u542b ".."\u3002',
+      'settings.edit.mode': '\u6a21\u5f0f',
+      'settings.edit.mode.desc': 'detached \u4e0d\u5efa\u5206\u652f\uff08\u63a8\u8350\uff09\uff1bbranch \u540c\u65f6\u521b\u5efa\u5206\u652f\u3002',
+      'settings.edit.namePrefix': '\u540d\u79f0\u524d\u7f00',
+      'settings.edit.namePrefix.desc': '\u68c0\u51fa\u76ee\u5f55\u540d\u524d\u7f00\uff1b\u4e0d\u80fd\u542b\u659c\u6760\uff0c\u4e0d\u80fd\u4ee5 "-" \u5f00\u5934\u3002',
+      'settings.edit.branchPrefix': '\u5206\u652f\u524d\u7f00',
+      'settings.edit.branchPrefix.desc': '\u5206\u652f\u540d\u524d\u7f00\uff1b\u4e0d\u80fd\u4ee5 "-" \u6216 "/" \u5f00\u5934\u3002',
+      'settings.edit.baseRef': '\u57fa\u51c6\u5f15\u7528',
+      'settings.edit.baseRef.desc': '\u68c0\u51fa\u8d77\u59cb\u7684\u672c\u5730\u5f15\u7528\uff1b\u4e0d\u80fd\u4ee5 "-" \u5f00\u5934\u3002',
+      'settings.edit.fetchBeforeCreate': '\u521b\u5efa\u5de5\u4f5c\u6811\u524d\u83b7\u53d6\u4e0a\u6e38\u66f4\u65b0',
+      'settings.edit.fetchBeforeCreate.desc': '\u5931\u8d25\u4ec5\u544a\u8b66\uff0c\u4f1a\u7ee7\u7eed\u4f7f\u7528\u672c\u5730\u5f15\u7528\u521b\u5efa\u3002',
+      'settings.edit.autoPrune': '\u81ea\u52a8\u5220\u9664\u65e7\u5de5\u4f5c\u6811',
+      'settings.edit.autoPrune.desc': '\u521b\u5efa\u65f6\u5220\u9664\u8d85\u51fa\u4fdd\u7559\u6570\u7684\u5de5\u4f5c\u6811\u3002',
+      'settings.edit.autoPruneKeep': '\u6700\u591a\u4fdd\u7559',
+      'settings.edit.autoPruneKeep.desc': '\u975e\u8d1f\u6574\u6570\u3002',
+      'settings.edit.pruneGraceMs': '\u6e05\u7406\u5bbd\u9650\u671f (ms)',
+      'settings.edit.pruneGraceMs.desc': '\u975e\u8d1f\u6574\u6570\uff1b\u6700\u8fd1\u4f7f\u7528\u8fc7\u7684\u5de5\u4f5c\u6811\u4f1a\u88ab\u8df3\u8fc7\u3002',
+      'settings.edit.poolGitignore': '\u5c06\u6c60\u76ee\u5f55\u5199\u5165 .gitignore',
+      'settings.edit.poolGitignore.desc': '\u907f\u514d\u68c0\u51fa\u6c60\u51fa\u73b0\u5728 git status \u4e2d\u3002',
+      'settings.edit.gitTimeoutMs': 'Git \u8d85\u65f6 (ms)',
+      'settings.edit.gitTimeoutMs.desc': '\u6b63\u6574\u6570\u3002',
+      'settings.edit.skipChildAgents': '\u8df3\u8fc7\u5b50\u4ee3\u7406',
+      'settings.edit.skipChildAgents.desc': '\u5b50\u4ee3\u7406\u4f1a\u8bdd\u4e0d\u521b\u5efa\u5de5\u4f5c\u6811\u3002',
+      'settings.edit.skipSessionIdPatterns': '\u8df3\u8fc7\u5339\u914d\u7684\u4f1a\u8bdd ID',
+      'settings.edit.skipSessionIdPatterns.desc': '\u6bcf\u884c\u4e00\u4e2a\u6b63\u5219\u8868\u8fbe\u5f0f\u3002',
+      'settings.edit.skipPresets': '\u8df3\u8fc7\u5339\u914d\u7684\u9884\u8bbe',
+      'settings.edit.skipPresets.desc': '\u6bcf\u884c\u4e00\u4e2a\u6b63\u5219\u8868\u8fbe\u5f0f\u3002',
+      'settings.edit.disableMarker': '\u7981\u7528\u6807\u8bb0\u6587\u4ef6',
+      'settings.edit.disableMarker.desc': '\u4ed3\u5e93\u5185\u5b58\u5728\u8be5\u6587\u4ef6\u540d\uff08\u4e0d\u542b\u659c\u6760\uff09\u65f6\u4e0d\u521b\u5efa\u5de5\u4f5c\u6811\u3002',
+      'settings.edit.maxPerRepo': '\u5355\u4ed3\u5e93\u4e0a\u9650',
+      'settings.edit.maxPerRepo.desc': '\u6b63\u6574\u6570\uff1b\u8d85\u8fc7\u540e\u62d2\u7edd\u521b\u5efa\u3002',
+      'settings.edit.noticeOnCreate': '\u521b\u5efa\u540e\u63d0\u793a',
+      'settings.edit.noticeOnCreate.desc': '\u5728\u65b0\u4f1a\u8bdd\u4e2d\u53d1\u5e03\u4e00\u6761\u7b80\u77ed\u63d0\u793a\u3002',
+      'settings.save': '\u4fdd\u5b58',
+      'settings.saving': '\u4fdd\u5b58\u4e2d\u2026',
+      'settings.reset': '\u6062\u590d\u9ed8\u8ba4',
+      'settings.saved': '\u5df2\u4fdd\u5b58',
+      'settings.dirty': '\u672a\u4fdd\u5b58',
+      'settings.conflict': '\u914d\u7f6e\u5df2\u5728\u522b\u5904\u4fee\u6539\uff0c\u8868\u5355\u5df2\u7528\u6700\u65b0\u503c\u5237\u65b0\u3002',
+      'settings.invalid': '\u975e\u6cd5\u503c\uff1a{message}',
+      'settings.unavailable': '\u8bbe\u7f6e\u670d\u52a1\u4e0d\u53ef\u7528\uff0c\u8bf7\u5728 profile \u7684 cordis.patch.yml \u4e2d\u4fee\u6539\u3002',
+      'settings.readOnly': '\u53ea\u8bfb',
+      'settings.management.title': '\u5de5\u4f5c\u6811\u7ba1\u7406',
     }
 
     /** Active locale service (or null when the service is unavailable). */
@@ -553,12 +653,22 @@ window.__ModuleLoader__.load({
           return invoke('prune', payload, signal)
         },
         /**
-         * Create a worktree for one Workspace path (the composer dock button).
-         * Value: `{ path, repoRoot, baseCommit, repoLabel, mode, branch, createdAt }`.
+         * Read or write the sticky work location for one Workspace.
+         * Read: `placement(workspacePath)`; write: `placement(workspacePath, mode)`.
+         * Value: `{ workspacePath, mode, defaultMode, isGit }`.
          */
-        createWorktree: function (input, signal) {
-          var workspacePath = input && typeof input.path === 'string' ? input.path : ''
-          return invoke('create', { path: workspacePath }, signal)
+        placement: function (workspacePath, mode, signal) {
+          var payload = { workspacePath: workspacePath }
+          if (typeof mode === 'string' && mode) payload.mode = mode
+          return invoke('placement', payload, signal)
+        },
+        /**
+         * Read or write the plugin configuration through the host settings service.
+         * `payload` is `{action:'get'}` / `{action:'set', patch, revision}` /
+         * `{action:'reset', revision}`; the value is the settings form descriptor.
+         */
+        settings: function (payload, signal) {
+          return invoke('settings', payload, signal)
         },
       }
     }
@@ -643,8 +753,6 @@ window.__ModuleLoader__.load({
         autoPruneKeep: typeof config.autoPruneKeep === 'number' && isFinite(config.autoPruneKeep) ? config.autoPruneKeep : null,
       }
     }
-
-    var EMPTY_LIST = Object.freeze({ repos: Object.freeze([]), config: EMPTY_CONFIG })
 
     /**
      * Normalize the `list` envelope into repo groups. Both the extended shape
@@ -742,75 +850,6 @@ window.__ModuleLoader__.load({
       } catch (error) {
         return null
       }
-    }
-
-    function pathsEqual(left, right) {
-      var a = String(left == null ? '' : left).replace(/[\\/]+$/, '')
-      var b = String(right == null ? '' : right).replace(/[\\/]+$/, '')
-      if (!a || !b) return false
-      var caseInsensitive = /^[A-Za-z]:/.test(a)
-      return caseInsensitive ? a.toLowerCase() === b.toLowerCase() : a === b
-    }
-
-    function workspaceItems(workspaces) {
-      if (!workspaces || !workspaces.list || typeof workspaces.list.getSnapshot !== 'function') return []
-      try {
-        var snapshot = workspaces.list.getSnapshot()
-        if (!snapshot) return []
-        if (Array.isArray(snapshot.items)) return snapshot.items
-        if (snapshot.byId && typeof snapshot.byId === 'object') return Object.keys(snapshot.byId).map(function (id) { return snapshot.byId[id] })
-      } catch (error) {
-        return []
-      }
-      return []
-    }
-
-    function findWorkspaceByPath(workspaces, path) {
-      var items = workspaceItems(workspaces)
-      for (var index = 0; index < items.length; index += 1) {
-        if (items[index] && pathsEqual(items[index].path, path)) return items[index]
-      }
-      return null
-    }
-
-    /** Registered workspace for `path`, created on demand. Returns the workspace or null. */
-    function ensureWorkspace(workspaces, path) {
-      if (!workspaces || typeof workspaces.create !== 'function' || !path) return Promise.resolve(null)
-      var existing = findWorkspaceByPath(workspaces, path)
-      if (existing) return Promise.resolve(existing)
-      return Promise.resolve(workspaces.create({ path: path })).then(function (created) {
-        if (created) return created
-        return findWorkspaceByPath(workspaces, path)
-      })
-    }
-
-    function sessionIdOf(created) {
-      if (typeof created === 'string' && created) return created
-      if (created && typeof created === 'object') {
-        if (typeof created.sessionId === 'string' && created.sessionId) return created.sessionId
-        if (typeof created.id === 'string' && created.id) return created.id
-      }
-      return ''
-    }
-
-    /** Start a Session in the workspace registered for `path`. */
-    function createSessionIn(ctx, path) {
-      var workspaces = readService(ctx, 'workspaces')
-      var sessions = readService(ctx, 'sessions')
-      if (!workspaces || typeof workspaces.create !== 'function' || !sessions || typeof sessions.create !== 'function') {
-        return Promise.reject(operationError('controllers-unavailable', 'workspaces/sessions controllers are unavailable'))
-      }
-      return ensureWorkspace(workspaces, path).then(function (workspace) {
-        if (!workspace || !workspace.workspaceId) {
-          throw operationError('workspace-unavailable', 'could not register a Workspace for ' + path)
-        }
-        return sessions.create({ workspaceId: workspace.workspaceId })
-      }).then(function (created) {
-        var sessionId = sessionIdOf(created)
-        if (!sessionId) throw operationError('session-unavailable', 'the Session controller returned no Session id')
-        openSessionById(ctx, sessionId)
-        return sessionId
-      })
     }
 
     /**
@@ -934,6 +973,390 @@ window.__ModuleLoader__.load({
     }
 
     /* ================================================================== *
+     * 4c. Session projection store — event-driven, no polling             *
+     * ================================================================== */
+
+    var PROJECTION_STEPS = ['prepare', 'checkout', 'finalize']
+
+    function normalizeProjection(value) {
+      if (!value || typeof value !== 'object') return null
+      var phase = value.phase === 'creating' || value.phase === 'ready' || value.phase === 'error' ? value.phase : null
+      if (!phase) return null
+      return {
+        phase: phase,
+        step: typeof value.step === 'string' && PROJECTION_STEPS.indexOf(value.step) !== -1 ? value.step : null,
+        path: typeof value.path === 'string' && value.path ? value.path : null,
+        repoRoot: typeof value.repoRoot === 'string' ? value.repoRoot : '',
+        workspaceRoot: typeof value.workspaceRoot === 'string' ? value.workspaceRoot : '',
+        mode: typeof value.mode === 'string' ? value.mode : '',
+        branch: typeof value.branch === 'string' && value.branch ? value.branch : null,
+        baseCommit: typeof value.baseCommit === 'string' && value.baseCommit ? value.baseCommit : null,
+        error: typeof value.error === 'string' && value.error ? value.error : null,
+        updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : '',
+      }
+    }
+
+    function sameProjection(left, right) {
+      if (left === right) return true
+      if (!left || !right) return false
+      return (
+        left.phase === right.phase &&
+        left.step === right.step &&
+        left.path === right.path &&
+        left.repoRoot === right.repoRoot &&
+        left.workspaceRoot === right.workspaceRoot &&
+        left.mode === right.mode &&
+        left.branch === right.branch &&
+        left.baseCommit === right.baseCommit &&
+        left.error === right.error &&
+        left.updatedAt === right.updatedAt
+      )
+    }
+
+    var sessionsService = null
+    var projectionValues = {}
+    var projectionListeners = []
+    var projectionVersion = 0
+
+    function sessionListSnapshot() {
+      if (!sessionsService || !sessionsService.list || typeof sessionsService.list.getSnapshot !== 'function') return null
+      try {
+        return sessionsService.list.getSnapshot()
+      } catch (error) {
+        return null
+      }
+    }
+
+    function readProjection(sessionId) {
+      if (!sessionId) return null
+      return Object.prototype.hasOwnProperty.call(projectionValues, sessionId) ? projectionValues[sessionId] : null
+    }
+
+    /** Rebuild the per-Session projection map, reusing references for unchanged values. */
+    function refreshProjectionStore() {
+      var snapshot = sessionListSnapshot()
+      if (!snapshot) return
+      var byId = snapshot.byId && typeof snapshot.byId === 'object' ? snapshot.byId : null
+      var next = {}
+      var changed = false
+      if (byId) {
+        for (var sessionId in byId) {
+          if (!Object.prototype.hasOwnProperty.call(byId, sessionId)) continue
+          var summary = byId[sessionId]
+          var values = summary && typeof summary === 'object' && summary.projectionValues && typeof summary.projectionValues === 'object' ? summary.projectionValues : null
+          var nextValue = normalizeProjection(values ? values.codexWorktree : null)
+          var had = Object.prototype.hasOwnProperty.call(projectionValues, sessionId)
+          if (had && sameProjection(projectionValues[sessionId], nextValue)) {
+            next[sessionId] = projectionValues[sessionId]
+          } else {
+            next[sessionId] = nextValue
+            changed = true
+          }
+        }
+      }
+      for (var previousId in projectionValues) {
+        if (!Object.prototype.hasOwnProperty.call(next, previousId)) changed = true
+      }
+      if (!changed) return
+      projectionValues = next
+      projectionVersion += 1
+      var listeners = projectionListeners.slice()
+      for (var index = 0; index < listeners.length; index += 1) {
+        try {
+          listeners[index](projectionVersion)
+        } catch (error) {
+          /* a subscriber must never break the store */
+        }
+      }
+    }
+
+    function installProjectionStore(ctx) {
+      var sessions = readService(ctx, 'sessions')
+      sessionsService = sessions || null
+      refreshProjectionStore()
+      if (!sessionsService || !sessionsService.list || typeof sessionsService.list.subscribe !== 'function') {
+        return function () {
+          sessionsService = null
+          projectionValues = {}
+        }
+      }
+      var unsubscribe = sessionsService.list.subscribe(function () {
+        refreshProjectionStore()
+      })
+      return function () {
+        try {
+          unsubscribe()
+        } catch (error) {
+          /* the service may already be disposed */
+        }
+        sessionsService = null
+        projectionValues = {}
+        projectionVersion += 1
+      }
+    }
+
+    /** Re-render when the projection of `sessionId` changes; values stay reference-stable. */
+    function useProjectionValue(sessionId) {
+      var pair = React.useState(function () {
+        return readProjection(sessionId)
+      })
+      var setValue = pair[1]
+      React.useEffect(
+        function () {
+          function sync() {
+            setValue(function (previous) {
+              var next = readProjection(sessionId)
+              return next === previous ? previous : next
+            })
+          }
+          sync()
+          projectionListeners.push(sync)
+          return function () {
+            var index = projectionListeners.indexOf(sync)
+            if (index !== -1) projectionListeners.splice(index, 1)
+          }
+        },
+        [sessionId],
+      )
+      return pair[0]
+    }
+
+    /* ================================================================== *
+     * 4d. Placement store — sticky per Workspace                          *
+     * ================================================================== */
+
+    var PLACEMENT_WORKTREE = 'worktree'
+    var PLACEMENT_LOCAL = 'local'
+
+    function normalizePlacement(value) {
+      if (!value || typeof value !== 'object') return null
+      return {
+        workspacePath: typeof value.workspacePath === 'string' ? value.workspacePath : '',
+        mode: value.mode === PLACEMENT_LOCAL ? PLACEMENT_LOCAL : PLACEMENT_WORKTREE,
+        defaultMode: value.defaultMode === PLACEMENT_LOCAL ? PLACEMENT_LOCAL : PLACEMENT_WORKTREE,
+        isGit: value.isGit !== false,
+      }
+    }
+
+    var placementCache = {}
+
+    function placementKey(path) {
+      return String(path == null ? '' : path).replace(/[\\/]+$/, '')
+    }
+
+    function readCachedPlacement(path) {
+      var key = placementKey(path)
+      return key && Object.prototype.hasOwnProperty.call(placementCache, key) ? placementCache[key] : null
+    }
+
+    function writeCachedPlacement(path, value) {
+      var key = placementKey(path)
+      if (!key) return
+      if (value) placementCache[key] = value
+      else delete placementCache[key]
+    }
+
+    /** Stable selector for one Session summary; the returned reference is snapshot-owned. */
+    function selectSessionSummary(sessionId) {
+      return function (state) {
+        return sessionId && state && state.byId ? state.byId[sessionId] : undefined
+      }
+    }
+
+    function findWorkspaceForSession(sessionId, state) {
+      if (!sessionId || !state || !Array.isArray(state.items)) return undefined
+      for (var index = 0; index < state.items.length; index += 1) {
+        var workspace = state.items[index]
+        if (!workspace || !Array.isArray(workspace.sessionIds)) continue
+        if (workspace.sessionIds.indexOf(sessionId) !== -1) return workspace
+      }
+      return undefined
+    }
+
+    function sessionSummaryFromService(ctx, sessionId) {
+      var sessions = readService(ctx, 'sessions')
+      if (!sessions || !sessions.list || typeof sessions.list.getSnapshot !== 'function') return undefined
+      try {
+        var snapshot = sessions.list.getSnapshot()
+        return snapshot && snapshot.byId ? snapshot.byId[sessionId] : undefined
+      } catch (error) {
+        return undefined
+      }
+    }
+
+    function workspaceFromService(ctx, sessionId) {
+      var workspaces = readService(ctx, 'workspaces')
+      if (!workspaces || !workspaces.list || typeof workspaces.list.getSnapshot !== 'function') return undefined
+      try {
+        return findWorkspaceForSession(sessionId, workspaces.list.getSnapshot())
+      } catch (error) {
+        return undefined
+      }
+    }
+
+    /**
+     * Resolve the hero Session's work-location context. The checkout path comes from
+     * the Session cwd first (authoritative once the host has switched it) and from
+     * the Session's Workspace membership second. Only blank Sessions — the hero —
+     * render the work-location selector.
+     */
+    function useHeroSessionInfo(props) {
+      var sessionId = readSessionId(props)
+      var useSessionsHook = props && typeof props.useSessions === 'function' ? props.useSessions : null
+      var useWorkspacesHook = props && typeof props.useWorkspaces === 'function' ? props.useWorkspaces : null
+      var summary = useSessionsHook
+        ? useSessionsHook(selectSessionSummary(sessionId))
+        : sessionSummaryFromService(props && props.ctx, sessionId)
+      var workspace = useWorkspacesHook
+        ? useWorkspacesHook(function (state) {
+            return findWorkspaceForSession(sessionId, state)
+          })
+        : workspaceFromService(props && props.ctx, sessionId)
+      var cwd = summary && typeof summary.cwd === 'string' ? summary.cwd : ''
+      var workspacePath = workspace && typeof workspace.path === 'string' ? workspace.path : ''
+      return {
+        sessionId: sessionId,
+        blank: !!(summary && summary.blank === true),
+        path: cwd || workspacePath,
+      }
+    }
+
+    /**
+     * Read the sticky placement for `workspacePath` (one GET per path) and expose a
+     * writer that updates optimistically, rolls back on failure and shows a note.
+     */
+    function usePlacementValue(workspacePath, apiRef) {
+      var pair = React.useState({ phase: 'idle', value: null, note: '', busy: false })
+      var state = pair[0]
+      var setState = pair[1]
+      var timerRef = React.useRef(null)
+
+      function clearNote() {
+        if (timerRef.current && typeof clearTimeout === 'function') {
+          try {
+            clearTimeout(timerRef.current)
+          } catch (error) {
+            /* already fired */
+          }
+          timerRef.current = null
+        }
+      }
+
+      function showNote(note) {
+        clearNote()
+        setState(function (previous) {
+          return { phase: previous.phase, value: previous.value, note: note, busy: previous.busy }
+        })
+        if (typeof setTimeout === 'function') {
+          timerRef.current = setTimeout(function () {
+            timerRef.current = null
+            setState(function (previous) {
+              return { phase: previous.phase, value: previous.value, note: '', busy: previous.busy }
+            })
+          }, 6000)
+        }
+      }
+
+      React.useEffect(
+        function () {
+          var key = placementKey(workspacePath)
+          if (!key) {
+            setState({ phase: 'idle', value: null, note: '', busy: false })
+            return undefined
+          }
+          var cached = readCachedPlacement(key)
+          setState({ phase: cached ? 'ready' : 'loading', value: cached, note: '', busy: false })
+          var api = apiRef.current
+          if (!api || typeof api.placement !== 'function') {
+            setState({ phase: 'error', value: cached, note: '', busy: false })
+            return undefined
+          }
+          var alive = true
+          var controller = typeof AbortController === 'function' ? new AbortController() : null
+          var pending
+          try {
+            pending = api.placement(key, undefined, controller ? controller.signal : undefined)
+          } catch (error) {
+            pending = Promise.reject(error)
+          }
+          Promise.resolve(pending).then(
+            function (value) {
+              if (!alive) return
+              var normalized = normalizePlacement(value)
+              writeCachedPlacement(key, normalized)
+              setState({ phase: 'ready', value: normalized, note: '', busy: false })
+            },
+            function (error) {
+              if (!alive) return
+              if (controller && controller.signal && controller.signal.aborted) return
+              setState({ phase: 'error', value: cached, note: '', busy: false })
+            },
+          )
+          return function () {
+            alive = false
+            if (controller) {
+              try {
+                controller.abort()
+              } catch (error) {
+                /* already aborted */
+              }
+            }
+          }
+        },
+        [workspacePath, apiRef],
+      )
+
+      React.useEffect(
+        function () {
+          return function () {
+            clearNote()
+          }
+        },
+        [],
+      )
+
+      function write(mode) {
+        var key = placementKey(workspacePath)
+        var api = apiRef.current
+        if (!key || !api || typeof api.placement !== 'function') {
+          showNote(translate('placement.failed'))
+          return Promise.resolve(false)
+        }
+        var previous = state.value
+        var optimistic = {
+          workspacePath: key,
+          mode: mode,
+          defaultMode: previous ? previous.defaultMode : PLACEMENT_WORKTREE,
+          isGit: previous ? previous.isGit : true,
+        }
+        writeCachedPlacement(key, optimistic)
+        setState({ phase: 'ready', value: optimistic, note: '', busy: true })
+        var pending
+        try {
+          pending = api.placement(key, mode, undefined)
+        } catch (error) {
+          pending = Promise.reject(error)
+        }
+        return Promise.resolve(pending).then(
+          function (value) {
+            var normalized = normalizePlacement(value) || optimistic
+            writeCachedPlacement(key, normalized)
+            setState({ phase: 'ready', value: normalized, note: '', busy: false })
+            return true
+          },
+          function (error) {
+            writeCachedPlacement(key, previous)
+            setState({ phase: previous ? 'ready' : 'error', value: previous, note: '', busy: false })
+            showNote(translate('placement.failed'))
+            return false
+          },
+        )
+      }
+
+      return { state: state, write: write }
+    }
+
+    /* ================================================================== *
      * 5. Small reusable hooks                                             *
      * ================================================================== */
 
@@ -967,70 +1390,6 @@ window.__ModuleLoader__.load({
         },
         [open, close, containerRef],
       )
-    }
-
-    /**
-     * Read the `status` endpoint for one Session. `revision` is the manual refresh
-     * token; the effect aborts its request when the Session changes or unmounts.
-     */
-    function useWorktreeStatus(sessionId, apiRef, revision) {
-      var pair = React.useState({ phase: 'idle', value: null, error: null })
-      var setState = pair[1]
-      React.useEffect(
-        function () {
-          if (!sessionId) {
-            setState({ phase: 'idle', value: null, error: null })
-            return undefined
-          }
-          var api = apiRef.current
-          if (!api || typeof api.status !== 'function') {
-            setState({
-              phase: 'error',
-              value: null,
-              error: operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'),
-            })
-            return undefined
-          }
-          var alive = true
-          var controller = typeof AbortController === 'function' ? new AbortController() : null
-          setState(function (previous) {
-            return {
-              phase: previous && previous.value ? 'refreshing' : 'loading',
-              value: previous ? previous.value : null,
-              error: null,
-            }
-          })
-          var pending
-          try {
-            pending = api.status(sessionId, controller ? controller.signal : undefined)
-          } catch (error) {
-            pending = Promise.reject(error)
-          }
-          Promise.resolve(pending).then(
-            function (value) {
-              if (!alive) return
-              setState({ phase: 'ready', value: normalizeStatus(value), error: null })
-            },
-            function (error) {
-              if (!alive) return
-              if (controller && controller.signal && controller.signal.aborted) return
-              setState({ phase: 'error', value: null, error: toError(error) })
-            },
-          )
-          return function () {
-            alive = false
-            if (controller) {
-              try {
-                controller.abort()
-              } catch (error) {
-                /* already aborted */
-              }
-            }
-          }
-        },
-        [sessionId, revision, apiRef, setState],
-      )
-      return pair[0]
     }
 
     /** Read the `list` endpoint; refresh through the returned revision bump. */
@@ -1104,7 +1463,7 @@ window.__ModuleLoader__.load({
 
     var STYLE_TEXT = [
       '@layer dsh-codex-worktree {',
-      '  .daw-chip-wrap, .daw-popover, .daw-settings, .daw-dock {',
+      '  .daw-chip-wrap, .daw-popover, .daw-settings, .daw-placement, .daw-progress {',
       '    --daw-text: var(--dsw-alias-label-primary);',
       '    --daw-secondary: var(--dsw-alias-label-secondary);',
       '    --daw-muted: var(--dsw-alias-label-tertiary);',
@@ -1123,7 +1482,7 @@ window.__ModuleLoader__.load({
       '    font-size: 13px;',
       '    line-height: 20px;',
       '  }',
-      '  .daw-chip-wrap *, .daw-popover *, .daw-settings *, .daw-dock * { box-sizing: border-box; }',
+      '  .daw-chip-wrap *, .daw-popover *, .daw-settings *, .daw-placement *, .daw-progress * { box-sizing: border-box; }',
       '  .daw-chip-wrap { position: relative; display: inline-flex; align-items: center; }',
       '  .daw-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 220px; padding: 0 10px; border: 1px solid var(--daw-line); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }',
       '  .daw-chip:hover { background: var(--daw-hover); }',
@@ -1207,13 +1566,67 @@ window.__ModuleLoader__.load({
       '  .daw-empty { margin-top: 16px; padding: 20px; border: 1px dashed var(--daw-line); border-radius: 12px; text-align: center; color: var(--daw-secondary); }',
       '  .daw-empty-hint { margin-top: 4px; color: var(--daw-muted); font-size: 12px; line-height: 18px; }',
       '  .daw-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }',
-      '  .daw-dock { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 2px 4px; }',
-      '  .daw-dock-button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px dashed var(--daw-line); border-radius: 8px; background: transparent; color: var(--daw-secondary); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }',
-      '  .daw-dock-button:hover:not(:disabled) { border-color: var(--daw-brand); background: var(--daw-hover); color: var(--daw-text); }',
-      '  .daw-dock-button:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
-      '  .daw-dock-button:disabled { opacity: .55; cursor: default; }',
-      '  .daw-dock-label { white-space: nowrap; }',
-      '  .daw-dock-error { color: var(--daw-danger); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }',
+      '  .daw-placement { position: relative; display: inline-flex; align-items: center; gap: 6px; }',
+      '  .daw-placement-pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--daw-line); border-radius: 999px; background: transparent; color: var(--daw-secondary); font: inherit; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }',
+      '  .daw-placement-pill:hover:not(:disabled) { background: var(--daw-hover); color: var(--daw-text); }',
+      '  .daw-placement-pill:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
+      '  .daw-placement-pill:disabled { opacity: .55; cursor: default; }',
+      '  .daw-placement-pill-is-local { border-style: dashed; }',
+      '  .daw-placement-chevron { flex: none; color: var(--daw-muted); }',
+      '  .daw-placement-note { color: var(--daw-danger); font-size: 12px; line-height: 18px; }',
+      '  .daw-placement-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 90; width: min(300px, calc(100vw - 24px)); padding: 6px; border: 1px solid var(--daw-line); border-radius: 12px; background: var(--daw-raised); box-shadow: var(--dsw-elevation-prominent, var(--dsw-shadow-lv3)); }',
+      '  .daw-placement-option { display: flex; width: 100%; align-items: flex-start; gap: 8px; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--daw-text); font: inherit; font-size: 13px; line-height: 18px; text-align: left; cursor: pointer; }',
+      '  .daw-placement-option:hover { background: var(--daw-hover); }',
+      '  .daw-placement-option:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
+      '  .daw-placement-check { flex: none; width: 14px; color: var(--daw-brand); }',
+      '  .daw-placement-option-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }',
+      '  .daw-placement-option-label { font-weight: 500; }',
+      '  .daw-placement-hint { margin: 4px 8px 2px; color: var(--daw-muted); font-size: 12px; line-height: 18px; }',
+      '  .daw-progress { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--daw-line); border-radius: 12px; background: var(--daw-surface); transition: opacity .4s ease; }',
+      '  .daw-progress-fade { opacity: 0; }',
+      '  .daw-progress-head { display: flex; align-items: center; gap: 6px; color: var(--daw-text); font-size: 13px; font-weight: 500; line-height: 20px; }',
+      '  .daw-progress-title-icon { flex: none; color: var(--daw-brand); }',
+      '  .daw-progress-steps { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }',
+      '  .daw-progress-step { display: flex; align-items: center; gap: 8px; color: var(--daw-secondary); font-size: 12px; line-height: 20px; }',
+      '  .daw-progress-step-done { color: var(--daw-secondary); }',
+      '  .daw-progress-step-current { color: var(--daw-text); }',
+      '  .daw-progress-step-pending { color: var(--daw-muted); }',
+      '  .daw-progress-mark { flex: none; display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; font-size: 12px; line-height: 14px; }',
+      '  .daw-progress-mark-done { color: var(--daw-success); }',
+      '  .daw-progress-mark-current { color: var(--daw-brand); }',
+      '  .daw-progress-mark-pending { color: var(--daw-muted); }',
+      '  .daw-progress-dot { width: 7px; height: 7px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: daw-spin .9s linear infinite; }',
+      '  .daw-progress-foot { display: flex; justify-content: flex-end; }',
+      '  .daw-progress-cancel { padding: 0; border: 0; background: transparent; color: var(--daw-secondary); font: inherit; font-size: 12px; line-height: 18px; cursor: pointer; }',
+      '  .daw-progress-cancel:hover { color: var(--daw-text); }',
+      '  .daw-progress-cancel:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
+      '  .daw-progress-error { color: var(--daw-danger); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }',
+      '  .daw-progress-done { color: var(--daw-secondary); font-size: 12px; line-height: 18px; }',
+      '  .daw-marker { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 14px; height: 14px; color: var(--daw-muted); }',
+      '  .daw-marker svg { width: 14px; height: 14px; }',
+      '  .daw-form { display: flex; flex-direction: column; gap: 10px; }',
+      '  .daw-form-row { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 4px 14px; align-items: start; }',
+      '  .daw-form-label { color: var(--daw-text); font-size: 13px; line-height: 20px; padding-top: 5px; }',
+      '  .daw-form-control { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }',
+      '  .daw-form-desc { grid-column: 2; color: var(--daw-muted); font-size: 12px; line-height: 18px; }',
+      '  .daw-form-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--daw-line); }',
+      '  .daw-form-status { font-size: 12px; line-height: 18px; }',
+      '  .daw-form-status-saved { color: var(--daw-success); }',
+      '  .daw-form-status-dirty { color: var(--daw-secondary); }',
+      '  .daw-form-status-conflict { color: var(--daw-danger); }',
+      '  .daw-form-status-invalid { color: var(--daw-danger); }',
+      '  .daw-form-status-unavailable { color: var(--daw-secondary); }',
+      '  .daw-switch { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid var(--daw-line); border-radius: 999px; background: transparent; color: var(--daw-secondary); font: inherit; font-size: 12px; cursor: pointer; }',
+      '  .daw-switch[aria-checked="true"] { border-color: var(--daw-brand); color: var(--daw-brand); background: var(--daw-soft); }',
+      '  .daw-switch:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 2px; }',
+      '  .daw-switch:disabled { opacity: .5; cursor: not-allowed; }',
+      '  .daw-select, .daw-textarea { border: 1px solid var(--daw-line); border-radius: 8px; background: var(--daw-surface); color: var(--daw-text); font: inherit; font-size: 12px; }',
+      '  .daw-select { height: 30px; padding: 0 8px; min-width: 140px; }',
+      '  .daw-textarea { width: 100%; min-height: 64px; padding: 6px 8px; line-height: 18px; resize: vertical; }',
+      '  .daw-select:focus-visible, .daw-textarea:focus-visible { outline: 2px solid var(--daw-brand); outline-offset: 1px; }',
+      '  .daw-select:disabled, .daw-textarea:disabled, .daw-form .daw-input:disabled { opacity: .55; }',
+      '  .daw-form-row .daw-input { max-width: 320px; }',
+      '  .daw-block-title { margin-bottom: 8px; font-size: 13px; font-weight: 500; }',
       '}',
     ].join('\n')
 
@@ -1264,20 +1677,81 @@ window.__ModuleLoader__.load({
      * 8. Session header chip + popover                                    *
      * ================================================================== */
 
-    function chipTone(state) {
-      if (state.phase === 'loading' || state.phase === 'refreshing' || state.phase === 'idle') return 'loading'
-      if (state.phase === 'error') return 'error'
-      if (!state.value || state.value.managed !== true) return 'idle'
+    /** Base chip state comes from the projection; `status` only adds popover details. */
+    function projectionTone(projection) {
+      if (!projection) return 'idle'
+      if (projection.phase === 'creating') return 'loading'
+      if (projection.phase === 'error') return 'error'
       return 'managed'
     }
 
-    function managedLabel(t, value) {
-      if (!value || value.managed !== true) return t('chip.unmanaged')
-      if (value.branch) return value.branch
-      var name = baseName(value.path) || 'worktree'
+    function projectionLabel(t, projection) {
+      if (!projection) return t('chip.unmanaged')
+      if (projection.phase === 'creating') return t('chip.loading')
+      if (projection.phase === 'error') return t('chip.error')
+      if (projection.branch) return projection.branch
+      var name = baseName(projection.path) || 'worktree'
       // The default directory prefix is `wt-`, so display `wt:<name>` without doubling it.
       var stripped = name.replace(/^wt[-_]/i, '')
       return 'wt:' + (stripped || name)
+    }
+
+    /**
+     * One `status` RPC while the popover is open (and on manual refresh); it is the
+     * only detail read and never polls.
+     */
+    function useStatusDetails(sessionId, apiRef, enabled, revision) {
+      var pair = React.useState({ phase: 'idle', value: null, error: null })
+      var setState = pair[1]
+      React.useEffect(
+        function () {
+          if (!enabled || !sessionId) {
+            setState({ phase: 'idle', value: null, error: null })
+            return undefined
+          }
+          var api = apiRef.current
+          if (!api || typeof api.status !== 'function') {
+            setState({
+              phase: 'error',
+              value: null,
+              error: operationError('connection-unavailable', 'dsh-codex-worktree: connection.rpc.call is unavailable'),
+            })
+            return undefined
+          }
+          var alive = true
+          var controller = typeof AbortController === 'function' ? new AbortController() : null
+          setState({ phase: 'loading', value: null, error: null })
+          var pending
+          try {
+            pending = api.status(sessionId, controller ? controller.signal : undefined)
+          } catch (error) {
+            pending = Promise.reject(error)
+          }
+          Promise.resolve(pending).then(
+            function (value) {
+              if (!alive) return
+              setState({ phase: 'ready', value: normalizeStatus(value), error: null })
+            },
+            function (error) {
+              if (!alive) return
+              if (controller && controller.signal && controller.signal.aborted) return
+              setState({ phase: 'error', value: null, error: toError(error) })
+            },
+          )
+          return function () {
+            alive = false
+            if (controller) {
+              try {
+                controller.abort()
+              } catch (error) {
+                /* already aborted */
+              }
+            }
+          }
+        },
+        [sessionId, enabled, revision, apiRef, setState],
+      )
+      return pair[0]
     }
 
     function WorktreeChip(props) {
@@ -1285,6 +1759,7 @@ window.__ModuleLoader__.load({
       useLocaleVersion()
       var apiRef = useStableRef(props.api)
       var sessionId = readSessionId(props)
+      var projection = useProjectionValue(sessionId)
       var revisionPair = React.useState(0)
       var revision = revisionPair[0]
       var bump = revisionPair[1]
@@ -1293,7 +1768,6 @@ window.__ModuleLoader__.load({
           return value + 1
         })
       }, [bump])
-      var state = useWorktreeStatus(sessionId, apiRef, revision)
       var openPair = React.useState(false)
       var open = openPair[0]
       var setOpen = openPair[1]
@@ -1302,13 +1776,14 @@ window.__ModuleLoader__.load({
         setOpen(false)
       }, [setOpen]), wrapRef)
 
+      var tone = projectionTone(projection)
+      var status = useStatusDetails(sessionId, apiRef, open && tone !== 'idle', revision)
+
       if (!sessionId) return null
 
-      var tone = chipTone(state)
-      var value = state.value
-      var label = tone === 'managed' ? managedLabel(t, value) : t('chip.' + (tone === 'idle' ? 'unmanaged' : tone))
-      var dirty = tone === 'managed' && value && typeof value.dirty === 'number' && value.dirty > 0 ? value.dirty : 0
-      var tooltip = tone === 'managed' && value ? value.path || t('chip.title') : t('chip.show')
+      var label = projectionLabel(t, projection)
+      var dirty = status.value && typeof status.value.dirty === 'number' && status.value.dirty > 0 ? status.value.dirty : 0
+      var tooltip = projection && projection.path ? projection.path : t('chip.title')
 
       var chip = h(
         'button',
@@ -1335,7 +1810,8 @@ window.__ModuleLoader__.load({
             sessionId: sessionId,
             api: props.api,
             t: t,
-            state: state,
+            projection: projection,
+            status: status,
             onRefresh: refresh,
             onClose: function () {
               setOpen(false)
@@ -1368,8 +1844,9 @@ window.__ModuleLoader__.load({
       var apiRef = useStableRef(props.api)
       var onRefresh = props.onRefresh
       var onClose = props.onClose
-      var state = props.state
-      var value = state.value
+      var projection = props.projection || null
+      var status = props.status || { phase: 'idle', value: null, error: null }
+      var details = status.value
 
       var busyPair = React.useState('')
       var busy = busyPair[0]
@@ -1390,8 +1867,15 @@ window.__ModuleLoader__.load({
       var dirtyBlocked = dirtyPair[0]
       var setDirtyBlocked = dirtyPair[1]
 
-      var managed = !!(value && value.managed === true)
+      var managed = projectionTone(projection) === 'managed' || !!(details && details.managed === true)
       var disabled = busy !== ''
+      var path = (details && details.path) || (projection && projection.path) || ''
+      var repoRoot = (details && details.repoRoot) || (projection && projection.repoRoot) || ''
+      var baseCommit = (details && details.baseCommit) || (projection && projection.baseCommit) || ''
+      var mode = (details && details.mode) || (projection && projection.mode) || ''
+      var dirty = details && typeof details.dirty === 'number' ? details.dirty : null
+      var createdText = details && details.createdAt ? formatDate(details.createdAt, activeLanguage()) : ''
+      var loadingDetails = managed && (status.phase === 'idle' || status.phase === 'loading')
 
       function fail(error) {
         setActionError(describeError(t, error))
@@ -1407,7 +1891,7 @@ window.__ModuleLoader__.load({
         setBusy(force ? 'force' : 'clean')
         setActionError('')
         setNotice('')
-        var targetPath = value && value.path ? value.path : ''
+        var targetPath = path
         var pending
         try {
           pending = api.clean(sessionId, { force: force === true, deleteBranch: deleteBranch === true })
@@ -1435,34 +1919,32 @@ window.__ModuleLoader__.load({
         { className: 'daw-popover-head' },
         h('span', { className: 'daw-popover-title' }, t('popover.title')),
         h('span', { className: 'daw-actions', style: { marginTop: 0 } },
-          h('button', { type: 'button', className: 'daw-button daw-button-ghost', onClick: onRefresh, disabled: state.phase === 'loading' || state.phase === 'refreshing' }, t('popover.refresh')),
+          h('button', { type: 'button', className: 'daw-button daw-button-ghost', onClick: onRefresh, disabled: status.phase === 'loading' }, t('popover.refresh')),
           h('button', { type: 'button', className: 'daw-button daw-button-ghost', onClick: onClose, 'aria-label': t('popover.close'), title: t('popover.close') }, '\u00d7'),
         ),
       )
 
       var body
-      if (state.phase === 'loading' || state.phase === 'refreshing' || state.phase === 'idle') {
-        body = h('p', { className: 'daw-note' }, h('span', { className: 'daw-spin', 'aria-hidden': 'true' }), ' ', t('settings.loading'))
-      } else if (state.phase === 'error') {
-        body = h('div', null,
-          h('p', { className: 'daw-note' }, t('popover.errorState')),
-          h('div', { className: 'daw-error' }, t('popover.error', { message: messageOf(state.error) })),
-        )
-      } else if (!managed) {
+      if (!managed) {
         body = h('p', { className: 'daw-note' }, t('popover.unmanagedHint'))
       } else {
-        var dirtyValue = value && typeof value.dirty === 'number' ? String(value.dirty) : t('popover.none')
-        var modeText = value && value.mode === 'branch' ? t('popover.mode.branch') : value && value.mode === 'detached' ? t('popover.mode.detached') : value && value.mode ? value.mode : t('popover.none')
-        var createdText = value && value.createdAt ? formatDate(value.createdAt, activeLanguage()) : ''
+        var dirtyValue = dirty !== null ? String(dirty) : t('popover.none')
+        var modeText = mode === 'branch' ? t('popover.mode.branch') : mode === 'detached' ? t('popover.mode.detached') : mode || t('popover.none')
         body = h('div', null,
           h('dl', { className: 'daw-facts' },
-            factRow(t, 'popover.path', h('code', { className: 'daw-code', title: value.path }, value.path || t('popover.none'))),
-            value.repoRoot ? factRow(t, 'popover.repo', h('code', { className: 'daw-code', title: value.repoRoot }, value.repoRoot)) : null,
+            factRow(t, 'popover.path', h('code', { className: 'daw-code', title: path }, path || t('popover.none'))),
+            repoRoot ? factRow(t, 'popover.repo', h('code', { className: 'daw-code', title: repoRoot }, repoRoot)) : null,
             factRow(t, 'popover.mode', modeText),
-            factRow(t, 'popover.baseCommit', h('code', { className: 'daw-code', title: value.baseCommit }, shortCommit(value.baseCommit) || t('popover.none'))),
+            factRow(t, 'popover.baseCommit', h('code', { className: 'daw-code', title: baseCommit }, shortCommit(baseCommit) || t('popover.none'))),
             factRow(t, 'popover.dirty', dirtyValue),
             createdText ? factRow(t, 'popover.created', createdText) : null,
           ),
+          loadingDetails
+            ? h('p', { className: 'daw-note' }, h('span', { className: 'daw-spin', 'aria-hidden': 'true' }), ' ', t('settings.loading'))
+            : null,
+          status.phase === 'error'
+            ? h('div', { className: 'daw-error', role: 'alert' }, t('popover.error', { message: messageOf(status.error) }))
+            : null,
           h('div', { className: 'daw-block' },
             confirming
               ? h('div', { className: 'daw-confirm' },
@@ -1480,7 +1962,7 @@ window.__ModuleLoader__.load({
                   ),
                 )
               : h('div', { className: 'daw-actions', style: { marginTop: 0 } },
-                  h('button', { type: 'button', className: 'daw-button', disabled: disabled, onClick: function () { setConfirming(true); setActionError(''); setNotice('') } }, t('popover.clean.action')),
+                  h('button', { type: 'button', className: 'daw-button', disabled: disabled || !sessionId, onClick: function () { setConfirming(true); setActionError(''); setNotice('') } }, t('popover.clean.action')),
                 ),
             dirtyBlocked
               ? h('div', null,
@@ -1513,54 +1995,10 @@ window.__ModuleLoader__.load({
     }
 
     /* ================================================================== *
-     * 8b. Composer dock — "新建 Worktree" for a blank Session             *
+     * 8b. Work-location selector — conversation.hero.options              *
      * ================================================================== */
 
-    /** The worktree directory marker used to tell a main checkout from a worktree. */
-    var WORKTREE_DIR_SEGMENT = '/.agents/worktrees/'
-
-    function isWorktreePath(path) {
-      var normalized = String(path == null ? '' : path).replace(/\\/g, '/')
-      return normalized.indexOf(WORKTREE_DIR_SEGMENT) !== -1
-    }
-
-    function sessionIdOfSnapshot(session) {
-      if (!session || typeof session !== 'object') return ''
-      return firstString(session.sessionId, session.id)
-    }
-
-    /** Selector for the Workspace that owns this Session (the owner passes `useWorkspaces`). */
-    function selectWorkspaceForSession(session) {
-      var sessionId = sessionIdOfSnapshot(session)
-      return function (state) {
-        if (!sessionId || !state || !Array.isArray(state.items)) return undefined
-        for (var index = 0; index < state.items.length; index += 1) {
-          var workspace = state.items[index]
-          if (!workspace) continue
-          if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.indexOf(sessionId) !== -1) return workspace
-        }
-        return undefined
-      }
-    }
-
-    /**
-     * Resolve the Session's Workspace through the slot-provided selector hook. The
-     * fallback (no hook supplied, e.g. a direct component mount) reads the snapshot
-     * once without subscribing; the slot runtime always provides `useWorkspaces`.
-     */
-    function useSessionWorkspace(props, session) {
-      var useWorkspaces = props && typeof props.useWorkspaces === 'function' ? props.useWorkspaces : null
-      if (useWorkspaces) return useWorkspaces(selectWorkspaceForSession(session))
-      var service = readService(props && props.ctx, 'workspaces')
-      if (!service || !service.list || typeof service.list.getSnapshot !== 'function') return undefined
-      try {
-        return selectWorkspaceForSession(session)(service.list.getSnapshot())
-      } catch (error) {
-        return undefined
-      }
-    }
-
-    function iconWorktree(size) {
+    function placementIcon(size) {
       var dimension = size || 14
       return h(
         'svg',
@@ -1582,199 +2020,405 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** Map the host's `create` failure codes to friendly copy; otherwise keep the message. */
-    function describeCreateError(t, error) {
-      var code = String((error && error.code) || '')
-      if (code === 'not-git-repository') return t('dock.error.notGit')
-      if (code === 'no-commit') return t('dock.error.noCommit')
-      if (code === 'disabled') return t('dock.error.disabled')
-      if (code === 'limit-reached') return t('dock.error.limitReached')
-      return messageOf(error) || t('settings.rpcUnavailable')
+    function iconCheck() {
+      return h(
+        'svg',
+        {
+          width: 14,
+          height: 14,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2.4,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('path', { d: 'M20 6 9 17l-5-5' }),
+      )
     }
 
-    /** Open the Session just created in the new Worktree's Workspace. */
-    function openCreatedSession(ctx, created, sessionId) {
-      var sessions = readService(ctx, 'sessions')
-      if (sessions && typeof sessions.open === 'function') {
-        sessions.open(typeof created === 'string' && created ? created : sessionId)
-        return
-      }
-      openSessionById(ctx, sessionId)
+    function iconChevronDown(size) {
+      return h(
+        'svg',
+        {
+          width: size || 12,
+          height: size || 12,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          className: 'daw-placement-chevron',
+        },
+        h('path', { d: 'm6 9 6 6 6-6' }),
+      )
     }
 
-    function WorktreeCreationDock(props) {
+    var PLACEMENT_OPTIONS = [PLACEMENT_WORKTREE, PLACEMENT_LOCAL]
+
+    function placementLabel(t, mode) {
+      return mode === PLACEMENT_LOCAL ? t('placement.local') : t('placement.worktree')
+    }
+
+    function PlacementField(props) {
       var t = useTranslator(props)
       useLocaleVersion()
       var apiRef = useStableRef(props.api)
-      var ctxRef = useStableRef(props.ctx)
-      var statePair = React.useState({ phase: 'idle', error: '' })
-      var state = statePair[0]
-      var setState = statePair[1]
-      var timerRef = React.useRef(null)
-      var abortRef = React.useRef(null)
-      var session = props && props.session && typeof props.session === 'object' ? props.session : null
-      var workspace = useSessionWorkspace(props, session)
+      var hero = useHeroSessionInfo(props)
+      var workspacePath = hero.path
+      var placement = usePlacementValue(workspacePath, apiRef)
+      var openPair = React.useState(false)
+      var open = openPair[0]
+      var setOpen = openPair[1]
+      var rootRef = React.useRef(null)
+      useDismiss(open, React.useCallback(function () {
+        setOpen(false)
+      }, [setOpen]), rootRef)
 
-      React.useEffect(function () {
-        return function () {
-          if (timerRef.current && typeof clearTimeout === 'function') {
-            try {
-              clearTimeout(timerRef.current)
-            } catch (error) {
-              /* already fired */
-            }
-            timerRef.current = null
-          }
-          if (abortRef.current && typeof abortRef.current.abort === 'function') {
-            try {
-              abortRef.current.abort()
-            } catch (error) {
-              /* already aborted */
-            }
-            abortRef.current = null
-          }
-        }
-      }, [])
+      if (!hero.sessionId || !hero.blank || !workspacePath) return null
+      var value = placement.state.value
+      if (value && value.isGit === false) return null
 
-      // A brand-new Session may render before the Workspace snapshot lists it;
-      // its header cwd is the same directory the Workspace would report.
-      var workspacePath = firstString(
-        workspace && workspace.path,
-        session && session.header && session.header.cwd,
-        session && session.cwd,
+      var fallbackMode = value && value.mode ? value.mode : value && value.defaultMode ? value.defaultMode : PLACEMENT_WORKTREE
+      var readOnly = placement.state.phase === 'error' || placement.state.phase === 'loading'
+      var busy = placement.state.busy
+      var disabled = readOnly || busy
+      var mode = placement.state.phase === 'ready' && value ? value.mode : fallbackMode
+
+      var pill = h(
+        'button',
+        {
+          type: 'button',
+          className: 'daw-placement-pill' + (mode === PLACEMENT_LOCAL ? ' daw-placement-pill-is-local' : ''),
+          disabled: disabled,
+          'aria-haspopup': 'menu',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-label': t('placement.title') + ': ' + placementLabel(t, mode),
+          title: t('placement.title'),
+          'data-dsh-codex-worktree-placement': PLACEMENT_ID,
+          onClick: function () {
+            if (disabled) return
+            setOpen(!open)
+          },
+        },
+        placementIcon(13),
+        h('span', null, placementLabel(t, mode)),
+        busy ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : iconChevronDown(12),
       )
-      var visible = !!(session && session.blank === true && workspacePath !== '' && !isWorktreePath(workspacePath))
-      if (!visible) return null
 
-      var creating = state.phase === 'creating'
-
-      function showError(message) {
-        setState({ phase: 'idle', error: message })
-        if (timerRef.current && typeof clearTimeout === 'function') {
-          try {
-            clearTimeout(timerRef.current)
-          } catch (error) {
-            /* already fired */
-          }
-          timerRef.current = null
-        }
-        if (typeof setTimeout === 'function') {
-          timerRef.current = setTimeout(function () {
-            timerRef.current = null
-            setState({ phase: 'idle', error: '' })
-          }, 8000)
-        }
-      }
-
-      function startCreate() {
-        if (creating) return
-        var api = apiRef.current
-        var ctx = ctxRef.current
-        var workspaces = readService(ctx, 'workspaces')
-        var sessions = readService(ctx, 'sessions')
-        if (!api || typeof api.createWorktree !== 'function') {
-          showError(t('settings.rpcUnavailable'))
-          return
-        }
-        if (!workspaces || typeof workspaces.create !== 'function' || !sessions || typeof sessions.create !== 'function') {
-          showError(t('settings.controllersUnavailable'))
-          return
-        }
-        if (!workspacePath) {
-          showError(t('dock.error.noWorkspace'))
-          return
-        }
-        if (timerRef.current && typeof clearTimeout === 'function') {
-          try {
-            clearTimeout(timerRef.current)
-          } catch (error) {
-            /* already fired */
-          }
-          timerRef.current = null
-        }
-        var controller = typeof AbortController === 'function' ? new AbortController() : null
-        abortRef.current = controller
-        setState({ phase: 'creating', error: '' })
-
-        var pending
-        try {
-          pending = api.createWorktree({ path: workspacePath }, controller ? controller.signal : undefined)
-        } catch (error) {
-          pending = Promise.reject(error)
-        }
-        Promise.resolve(pending)
-          .then(function (value) {
-            var createdWorktree = value && typeof value === 'object' ? value : {}
-            var worktreePath = firstString(createdWorktree.path)
-            if (!worktreePath) throw operationError('create-failed', 'create returned no worktree path')
-            var repoLabel = firstString(createdWorktree.repoLabel) || (createdWorktree.repoRoot ? baseName(createdWorktree.repoRoot) : '')
-            var title = (repoLabel || 'worktree') + '/' + (baseName(worktreePath) || 'worktree')
-            return Promise.resolve(workspaces.create({ path: worktreePath }))
-              .then(function (createdWorkspace) {
-                if (!createdWorkspace || !createdWorkspace.workspaceId) {
-                  throw operationError('workspace-unavailable', 'workspaces.create returned no workspaceId')
-                }
-                // Same sequence as the reference plugin: create → rename → create Session → open.
-                var rename =
-                  typeof workspaces.rename === 'function'
-                    ? Promise.resolve(workspaces.rename(createdWorkspace.workspaceId, title))
-                    : Promise.resolve()
-                return rename.then(function () {
-                  return createdWorkspace
-                })
-              })
-              .then(function (createdWorkspace) {
-                return Promise.resolve(sessions.create({ workspaceId: createdWorkspace.workspaceId })).then(function (createdSession) {
-                  var nextSessionId = sessionIdOf(createdSession) || sessionIdOfSnapshot(createdSession)
-                  if (!nextSessionId) throw operationError('session-unavailable', 'sessions.create returned no Session id')
-                  openCreatedSession(ctx, createdSession, nextSessionId)
-                })
-              })
-          })
-          .then(
-            function () {
-              abortRef.current = null
-              setState({ phase: 'idle', error: '' })
-            },
-            function (error) {
-              abortRef.current = null
-              if (controller && controller.signal && controller.signal.aborted) return
-              showError(describeCreateError(t, error))
-            },
+      var menu = open
+        ? h(
+            'div',
+            { className: 'daw-placement-menu', role: 'menu', 'aria-label': t('placement.title') },
+            PLACEMENT_OPTIONS.map(function (option) {
+              return h(
+                'button',
+                {
+                  type: 'button',
+                  key: option,
+                  role: 'menuitemradio',
+                  'aria-checked': option === mode ? 'true' : 'false',
+                  className: 'daw-placement-option',
+                  onClick: function () {
+                    setOpen(false)
+                    if (option === mode) return
+                    placement.write(option)
+                  },
+                },
+                h('span', { className: 'daw-placement-check', 'aria-hidden': 'true' }, option === mode ? iconCheck() : null),
+                h(
+                  'span',
+                  { className: 'daw-placement-option-text' },
+                  h('span', { className: 'daw-placement-option-label' }, placementLabel(t, option)),
+                ),
+              )
+            }),
+            h('p', { className: 'daw-placement-hint' }, t('placement.hint')),
           )
-      }
+        : null
 
       return h(
         'div',
-        { className: 'daw-dock', 'data-dsh-codex-worktree-new': DOCK_ID },
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'daw-dock-button',
-            disabled: creating,
-            'aria-busy': creating ? 'true' : undefined,
-            'aria-label': t('dock.new.show'),
-            title: t('dock.new.show'),
-            onClick: startCreate,
-          },
-          creating ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : iconWorktree(14),
-          h('span', { className: 'daw-dock-label' }, creating ? t('dock.new.busy') : t('dock.new')),
-        ),
-        state.error ? h('div', { className: 'daw-dock-error', role: 'alert' }, state.error) : null,
+        { className: 'daw-placement', ref: rootRef },
+        pill,
+        placement.state.note ? h('span', { className: 'daw-placement-note', role: 'status' }, placement.state.note) : null,
+        menu,
       )
     }
 
-    function DockEntry(props) {
-      return boundary(null, h(WorktreeCreationDock, props))
+    function PlacementEntry(props) {
+      return boundary(null, h(PlacementField, props))
     }
 
     /* ================================================================== *
-     * 9. Settings section — Worktrees management page                     *
+     * 8c. Creation progress card — conversation.input.dock                *
+     * ================================================================== */
+
+    var PROGRESS_MIN_VISIBLE_MS = 1000
+    var PROGRESS_FADE_MS = 400
+
+    /**
+     * Display state machine for the progress card:
+     * hidden → creating → done (400ms fade) → hidden, or creating → error.
+     * The card is shown for at least 1000ms after creation starts; `cancel` only
+     * hides it (the host keeps creating).
+     */
+    function useProgressDisplay(projection) {
+      var pair = React.useState({ mode: 'hidden' })
+      var state = pair[0]
+      var setState = pair[1]
+      var stateRef = React.useRef(state)
+      stateRef.current = state
+      var minElapsedRef = React.useRef(false)
+      var pendingReadyRef = React.useRef(false)
+      var cancelledRef = React.useRef(false)
+      var sawCreatingRef = React.useRef(false)
+      var minTimerRef = React.useRef(null)
+      var fadeTimerRef = React.useRef(null)
+
+      function clearTimer(ref) {
+        if (ref.current && typeof clearTimeout === 'function') {
+          try {
+            clearTimeout(ref.current)
+          } catch (error) {
+            /* already fired */
+          }
+        }
+        ref.current = null
+      }
+
+      function clearTimers() {
+        clearTimer(minTimerRef)
+        clearTimer(fadeTimerRef)
+      }
+
+      function finishReady() {
+        if (cancelledRef.current) return
+        clearTimer(minTimerRef)
+        clearTimer(fadeTimerRef)
+        minElapsedRef.current = true
+        pendingReadyRef.current = false
+        setState({ mode: 'done' })
+        if (typeof setTimeout === 'function') {
+          fadeTimerRef.current = setTimeout(function () {
+            fadeTimerRef.current = null
+            setState({ mode: 'hidden' })
+          }, PROGRESS_FADE_MS)
+        } else {
+          setState({ mode: 'hidden' })
+        }
+      }
+
+      React.useEffect(
+        function () {
+          var phase = projection && typeof projection === 'object' ? projection.phase : null
+          if (phase === 'creating') {
+            // A new creation cycle starts only when we were not already creating;
+            // updates within the same cycle must not resurrect a cancelled card.
+            if (!sawCreatingRef.current) {
+              sawCreatingRef.current = true
+              cancelledRef.current = false
+              pendingReadyRef.current = false
+              minElapsedRef.current = false
+              clearTimers()
+              setState({ mode: 'creating' })
+              if (typeof setTimeout === 'function') {
+                minTimerRef.current = setTimeout(function () {
+                  minTimerRef.current = null
+                  minElapsedRef.current = true
+                  if (pendingReadyRef.current) finishReady()
+                }, PROGRESS_MIN_VISIBLE_MS)
+              } else {
+                minElapsedRef.current = true
+              }
+            }
+            return
+          }
+          if (phase === 'ready') {
+            if (cancelledRef.current) {
+              sawCreatingRef.current = false
+              return
+            }
+            if (stateRef.current.mode === 'creating' && !minElapsedRef.current) {
+              pendingReadyRef.current = true
+              return
+            }
+            sawCreatingRef.current = false
+            if (stateRef.current.mode !== 'done' && stateRef.current.mode !== 'hidden') finishReady()
+            return
+          }
+          if (phase === 'error') {
+            sawCreatingRef.current = false
+            clearTimers()
+            if (!cancelledRef.current) setState({ mode: 'error' })
+            return
+          }
+          sawCreatingRef.current = false
+          if (stateRef.current.mode === 'creating') {
+            clearTimers()
+            setState({ mode: 'hidden' })
+          }
+        },
+        [projection],
+      )
+
+      React.useEffect(
+        function () {
+          return function () {
+            clearTimers()
+          }
+        },
+        [],
+      )
+
+      function cancel() {
+        cancelledRef.current = true
+        clearTimers()
+        setState({ mode: 'hidden' })
+      }
+
+      return { state: state, cancel: cancel }
+    }
+
+    function progressStepStates(projection) {
+      var current = 0
+      if (projection && projection.phase === 'creating' && projection.step) {
+        var index = PROJECTION_STEPS.indexOf(projection.step)
+        if (index !== -1) current = index
+      }
+      return PROJECTION_STEPS.map(function (step, index) {
+        if (projection && projection.phase !== 'creating') return { step: step, status: 'done' }
+        if (index < current) return { step: step, status: 'done' }
+        if (index === current) return { step: step, status: 'current' }
+        return { step: step, status: 'pending' }
+      })
+    }
+
+    function progressMarkClass(status) {
+      return 'daw-progress-mark daw-progress-mark-' + status
+    }
+
+    function ProgressCard(props) {
+      var t = useTranslator(props)
+      useLocaleVersion()
+      var sessionId = readSessionId(props)
+      var projection = useProjectionValue(sessionId)
+      var display = useProgressDisplay(projection)
+      var mode = display.state.mode
+
+      if (!sessionId || mode === 'hidden') return null
+
+      var steps = progressStepStates(projection)
+      var rows = steps.map(function (entry) {
+        var marker =
+          entry.status === 'done'
+            ? h('span', { className: progressMarkClass('done'), 'aria-hidden': 'true' }, '\u2713')
+            : entry.status === 'current'
+              ? h('span', { className: progressMarkClass('current'), 'aria-hidden': 'true' }, h('span', { className: 'daw-progress-dot' }))
+              : h('span', { className: progressMarkClass('pending'), 'aria-hidden': 'true' }, '\u25cb')
+        return h(
+          'li',
+          {
+            key: entry.step,
+            className: 'daw-progress-step daw-progress-step-' + entry.status,
+            'aria-current': entry.status === 'current' ? 'step' : undefined,
+            'data-step': entry.step,
+            'data-status': entry.status,
+          },
+          marker,
+          h('span', null, t('progress.' + entry.step)),
+        )
+      })
+
+      var body
+      if (mode === 'error') {
+        body = [
+          h('p', { className: 'daw-progress-error', key: 'failed' }, t('progress.failed')),
+          projection && projection.error
+            ? h('p', { className: 'daw-progress-error', key: 'reason' }, t('progress.reason', { reason: projection.error }))
+            : null,
+        ]
+      } else {
+        body = h(
+          'div',
+          null,
+          h('ul', { className: 'daw-progress-steps' }, rows),
+          mode === 'done' ? h('p', { className: 'daw-progress-done', 'data-step': 'done' }, t('progress.done')) : null,
+        )
+      }
+
+      return h(
+        'section',
+        {
+          className: 'daw-progress daw-progress-' + mode + (mode === 'done' ? ' daw-progress-fade' : ''),
+          'data-dsh-codex-worktree-progress': PROGRESS_ID,
+          'aria-label': t('progress.title'),
+          'aria-live': 'polite',
+        },
+        h(
+          'div',
+          { className: 'daw-progress-head' },
+          h('span', { className: 'daw-progress-title-icon', 'aria-hidden': 'true' }, placementIcon(14)),
+          h('span', { className: mode === 'error' ? 'daw-progress-error' : null }, t('progress.title')),
+        ),
+        body,
+        mode === 'done'
+          ? null
+          : h(
+              'div',
+              { className: 'daw-progress-foot' },
+              h(
+                'button',
+                { type: 'button', className: 'daw-progress-cancel', onClick: display.cancel, 'data-action': 'cancel' },
+                t('progress.cancel'),
+              ),
+            ),
+      )
+    }
+
+    function ProgressEntry(props) {
+      return boundary(null, h(ProgressCard, props))
+    }
+
+    /* ================================================================== *
+     * 8d. Sidebar row marker — sidebar.session.row.leading                *
+     * ================================================================== */
+
+    function SessionMarker(props) {
+      var t = useTranslator(props)
+      useLocaleVersion()
+      var sessionId = readSessionId(props)
+      var projection = useProjectionValue(sessionId)
+      if (!sessionId || !projection || projection.phase !== 'ready') return null
+      var path = projection.path || ''
+      var title = t('marker.tooltip', { title: t('marker.title'), path: path || '\u2014' })
+      return h(
+        'span',
+        {
+          className: 'daw-marker',
+          title: title,
+          role: 'img',
+          'aria-label': title,
+          'data-dsh-codex-worktree-marker': MARKER_ID,
+        },
+        placementIcon(14),
+      )
+    }
+
+    function MarkerEntry(props) {
+      return boundary(null, h(SessionMarker, props))
+    }
+
+    /* ================================================================== *
+     * 9. Settings section — editable config + worktree management         *
      * ================================================================== */
 
     var DETACHED_MODE = 'detached'
     var BRANCH_MODE = 'branch'
+    var CONFIG_INPUT_TYPES = ['boolean', 'number', 'text', 'select', 'lines']
 
     function recordKey(record, index) {
       return record.path || (record.repoRoot ? record.repoRoot + '#' + index : 'record-' + index)
@@ -1821,13 +2465,526 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function onOff(t, value) {
-      return value ? t('settings.config.on') : t('settings.config.off')
+    /* ---------------- configuration model ---------------- */
+
+    function normalizeSettingsField(field) {
+      if (!field || typeof field !== 'object') return null
+      var key = typeof field.key === 'string' ? field.key : ''
+      if (!key) return null
+      var type = CONFIG_INPUT_TYPES.indexOf(field.type) !== -1 ? field.type : 'text'
+      var options = []
+      if (Array.isArray(field.options)) {
+        for (var index = 0; index < field.options.length; index += 1) {
+          var option = field.options[index]
+          var value = typeof option === 'string' ? option : option && typeof option.value === 'string' ? option.value : ''
+          if (value) options.push(value)
+        }
+      }
+      return {
+        key: key,
+        type: type,
+        options: options,
+        min: typeof field.min === 'number' && isFinite(field.min) ? field.min : undefined,
+        description: typeof field.description === 'string' ? field.description : '',
+      }
     }
 
-    function configRootText(t, config) {
-      if (config.root) return config.root
-      return '(' + t('settings.config.inRepo', { directory: config.directory || '.' }) + ')'
+    function normalizeSettingsDescriptor(value) {
+      if (!value || typeof value !== 'object') return null
+      var fields = []
+      if (Array.isArray(value.fields)) {
+        for (var index = 0; index < value.fields.length; index += 1) {
+          var field = normalizeSettingsField(value.fields[index])
+          if (field) fields.push(field)
+        }
+      }
+      return {
+        ns: typeof value.ns === 'string' ? value.ns : SETTINGS_NS,
+        revision: typeof value.revision === 'number' && isFinite(value.revision) ? value.revision : 0,
+        writable: value.writable !== false,
+        values: value.values && typeof value.values === 'object' ? value.values : {},
+        defaults: value.defaults && typeof value.defaults === 'object' ? value.defaults : {},
+        fields: fields,
+      }
+    }
+
+    function cloneConfigValues(values) {
+      var out = {}
+      if (!values || typeof values !== 'object') return out
+      for (var key in values) {
+        if (!Object.prototype.hasOwnProperty.call(values, key)) continue
+        var value = values[key]
+        out[key] = Array.isArray(value) ? value.slice() : value
+      }
+      return out
+    }
+
+    function draftFromDescriptor(descriptor) {
+      var draft = cloneConfigValues(descriptor.values)
+      for (var index = 0; index < descriptor.fields.length; index += 1) {
+        var field = descriptor.fields[index]
+        if (field.type === 'lines' && !Array.isArray(draft[field.key])) {
+          draft[field.key] = typeof draft[field.key] === 'string' && draft[field.key] ? draft[field.key].split('\n') : []
+        }
+      }
+      return draft
+    }
+
+    function configValuesEqual(left, right) {
+      if (Array.isArray(left) || Array.isArray(right)) {
+        var a = Array.isArray(left) ? left : []
+        var b = Array.isArray(right) ? right : []
+        if (a.length !== b.length) return false
+        for (var index = 0; index < a.length; index += 1) if (String(a[index]) !== String(b[index])) return false
+        return true
+      }
+      if (typeof left === 'number' || typeof right === 'number') return String(left) === String(right)
+      return left === right
+    }
+
+    function buildConfigPatch(descriptor, draft) {
+      var patch = {}
+      var changed = false
+      for (var index = 0; index < descriptor.fields.length; index += 1) {
+        var key = descriptor.fields[index].key
+        if (!configValuesEqual(descriptor.values[key], draft[key])) {
+          patch[key] = draft[key]
+          changed = true
+        }
+      }
+      return changed ? patch : null
+    }
+
+    function configFieldLabel(t, field) {
+      var label = t('settings.edit.' + field.key)
+      return label === 'settings.edit.' + field.key ? field.key : label
+    }
+
+    function configFieldDescription(t, field) {
+      var key = 'settings.edit.' + field.key + '.desc'
+      var text = t(key)
+      if (text !== key) return text
+      return field.description || ''
+    }
+
+    function configOptionLabel(t, field, value) {
+      if (field.key === 'defaultPlacement') return placementLabel(t, value)
+      if (field.key === 'mode') {
+        if (value === DETACHED_MODE) return t('popover.mode.detached')
+        if (value === BRANCH_MODE) return t('popover.mode.branch')
+      }
+      return value
+    }
+
+    function settingsStatusText(t, state) {
+      if (state.status === 'saving') return t('settings.saving')
+      if (state.status === 'saved') return t('settings.saved')
+      if (state.status === 'dirty') return t('settings.dirty')
+      if (state.status === 'conflict') return t('settings.conflict')
+      if (state.status === 'invalid') return t('settings.invalid', { message: state.message || t('settings.unknown') })
+      if (state.status === 'unavailable') return t('settings.unavailable')
+      return ''
+    }
+
+    /**
+     * Load the settings descriptor and keep the draft, revision and status in one
+     * state object. `save`/`reset` write through the host settings service.
+     */
+    function useSettingsConfig(apiRef) {
+      var pair = React.useState({
+        phase: 'loading',
+        descriptor: null,
+        draft: {},
+        status: 'saved',
+        message: '',
+        busy: false,
+      })
+      var state = pair[0]
+      var setState = pair[1]
+
+      function load(preserveStatus) {
+        var api = apiRef.current
+        if (!api || typeof api.settings !== 'function') {
+          setState({ phase: 'unavailable', descriptor: null, draft: {}, status: 'unavailable', message: '', busy: false })
+          return Promise.resolve(false)
+        }
+        setState(function (previous) {
+          return {
+            phase: previous.descriptor ? previous.phase : 'loading',
+            descriptor: previous.descriptor,
+            draft: previous.draft,
+            status: preserveStatus ? previous.status : 'saved',
+            message: preserveStatus ? previous.message : '',
+            busy: false,
+          }
+        })
+        return Promise.resolve(api.settings({ action: 'get' })).then(
+          function (value) {
+            var descriptor = normalizeSettingsDescriptor(value)
+            if (!descriptor) {
+              setState({ phase: 'error', descriptor: null, draft: {}, status: 'invalid', message: 'invalid settings response', busy: false })
+              return false
+            }
+            setState({
+              phase: 'ready',
+              descriptor: descriptor,
+              draft: draftFromDescriptor(descriptor),
+              status: preserveStatus ? 'conflict' : 'saved',
+              message: preserveStatus ? translate('settings.conflict') : '',
+              busy: false,
+            })
+            return true
+          },
+          function (error) {
+            var code = error && error.code ? String(error.code) : ''
+            if (code === 'settings-unavailable') {
+              setState({ phase: 'unavailable', descriptor: null, draft: {}, status: 'unavailable', message: '', busy: false })
+              return false
+            }
+            setState({ phase: 'error', descriptor: null, draft: {}, status: 'invalid', message: messageOf(error), busy: false })
+            return false
+          },
+        )
+      }
+
+      React.useEffect(function () {
+        load(false)
+      }, [apiRef])
+
+      function setField(key, value) {
+        setState(function (previous) {
+          if (!previous.descriptor) return previous
+          var draft = cloneConfigValues(previous.draft)
+          draft[key] = value
+          return {
+            phase: previous.phase,
+            descriptor: previous.descriptor,
+            draft: draft,
+            status: 'dirty',
+            message: '',
+            busy: previous.busy,
+          }
+        })
+      }
+
+      function applyResult(value) {
+        var descriptor = normalizeSettingsDescriptor(value)
+        if (!descriptor) {
+          setState(function (previous) {
+            return {
+              phase: previous.phase,
+              descriptor: previous.descriptor,
+              draft: previous.draft,
+              status: 'invalid',
+              message: 'invalid settings response',
+              busy: false,
+            }
+          })
+          return
+        }
+        setState({
+          phase: 'ready',
+          descriptor: descriptor,
+          draft: draftFromDescriptor(descriptor),
+          status: 'saved',
+          message: '',
+          busy: false,
+        })
+      }
+
+      function handleFailure(error) {
+        var code = error && error.code ? String(error.code) : ''
+        if (code === 'conflict') {
+          setState(function (previous) {
+            return {
+              phase: previous.phase,
+              descriptor: previous.descriptor,
+              draft: previous.draft,
+              status: 'conflict',
+              message: translate('settings.conflict'),
+              busy: false,
+            }
+          })
+          load(true)
+          return
+        }
+        if (code === 'settings-unavailable') {
+          setState(function (previous) {
+            return {
+              phase: 'unavailable',
+              descriptor: previous.descriptor,
+              draft: previous.draft,
+              status: 'unavailable',
+              message: '',
+              busy: false,
+            }
+          })
+          return
+        }
+        setState(function (previous) {
+          return {
+            phase: previous.phase,
+            descriptor: previous.descriptor,
+            draft: previous.draft,
+            status: 'invalid',
+            message: messageOf(error),
+            busy: false,
+          }
+        })
+      }
+
+      function save() {
+        if (state.busy || !state.descriptor || state.descriptor.writable === false) return
+        var patch = buildConfigPatch(state.descriptor, state.draft)
+        if (!patch) {
+          setState(function (previous) {
+            return {
+              phase: previous.phase,
+              descriptor: previous.descriptor,
+              draft: previous.draft,
+              status: 'saved',
+              message: '',
+              busy: false,
+            }
+          })
+          return
+        }
+        var api = apiRef.current
+        if (!api || typeof api.settings !== 'function') {
+          handleFailure(operationError('settings-unavailable', 'settings unavailable'))
+          return
+        }
+        setState(function (previous) {
+          return {
+            phase: previous.phase,
+            descriptor: previous.descriptor,
+            draft: previous.draft,
+            status: 'saving',
+            message: '',
+            busy: true,
+          }
+        })
+        Promise.resolve(api.settings({ action: 'set', patch: patch, revision: state.descriptor.revision })).then(
+          function (value) {
+            applyResult(value)
+          },
+          function (error) {
+            handleFailure(error)
+          },
+        )
+      }
+
+      function reset() {
+        if (state.busy || !state.descriptor || state.descriptor.writable === false) return
+        var api = apiRef.current
+        if (!api || typeof api.settings !== 'function') {
+          handleFailure(operationError('settings-unavailable', 'settings unavailable'))
+          return
+        }
+        setState(function (previous) {
+          return {
+            phase: previous.phase,
+            descriptor: previous.descriptor,
+            draft: previous.draft,
+            status: 'saving',
+            message: '',
+            busy: true,
+          }
+        })
+        Promise.resolve(api.settings({ action: 'reset', revision: state.descriptor.revision })).then(
+          function (value) {
+            applyResult(value, 'saved')
+          },
+          function (error) {
+            handleFailure(error)
+          },
+        )
+      }
+
+      return {
+        state: state,
+        reload: function () {
+          return load(false)
+        },
+        setField: setField,
+        save: save,
+        reset: reset,
+      }
+    }
+
+    function ConfigForm(props) {
+      var t = useTranslator(props)
+      useLocaleVersion()
+      var apiRef = useStableRef(props.api)
+      var config = useSettingsConfig(apiRef)
+      var state = config.state
+      var descriptor = state.descriptor
+      var readOnly = state.status === 'unavailable' || (descriptor && descriptor.writable === false)
+
+      var rows = []
+      if (descriptor) {
+        for (let index = 0; index < descriptor.fields.length; index += 1) {
+          // `let`/`const` keep each row's handlers bound to its own field.
+          const field = descriptor.fields[index]
+          const key = field.key
+          const rawValue = state.draft[key]
+          let control
+          if (field.type === 'boolean') {
+            control = h(
+              'button',
+              {
+                type: 'button',
+                className: 'daw-switch',
+                role: 'switch',
+                'aria-checked': rawValue === true ? 'true' : 'false',
+                disabled: readOnly || state.busy,
+                onClick: function (event) {
+                  event.preventDefault()
+                  config.setField(key, rawValue !== true)
+                },
+              },
+              rawValue === true ? t('settings.config.on') : t('settings.config.off'),
+            )
+          } else if (field.type === 'select') {
+            var options = field.options.length > 0 ? field.options : field.key === 'defaultPlacement' ? PLACEMENT_OPTIONS : field.key === 'mode' ? [DETACHED_MODE, BRANCH_MODE] : []
+            control = h(
+              'select',
+              {
+                className: 'daw-select',
+                value: rawValue === undefined || rawValue === null ? '' : String(rawValue),
+                disabled: readOnly || state.busy,
+                'aria-label': configFieldLabel(t, field),
+                onChange: function (event) {
+                  config.setField(key, event && event.target ? event.target.value : '')
+                },
+              },
+              options.map(function (option) {
+                return h('option', { key: option, value: option }, configOptionLabel(t, field, option))
+              }),
+            )
+          } else if (field.type === 'lines') {
+            control = h('textarea', {
+              className: 'daw-textarea',
+              rows: 3,
+              value: Array.isArray(rawValue) ? rawValue.join('\n') : rawValue === undefined || rawValue === null ? '' : String(rawValue),
+              placeholder: field.description || '',
+              disabled: readOnly || state.busy,
+              spellCheck: false,
+              'aria-label': configFieldLabel(t, field),
+              onChange: function (event) {
+                var text = event && event.target ? event.target.value : ''
+                config.setField(
+                  key,
+                  String(text)
+                    .split('\n')
+                    .map(function (line) {
+                      return line.trim()
+                    })
+                    .filter(function (line) {
+                      return line !== ''
+                    }),
+                )
+              },
+            })
+          } else if (field.type === 'number') {
+            control = h('input', {
+              className: 'daw-input',
+              type: 'number',
+              min: field.min,
+              value: rawValue === undefined || rawValue === null ? '' : String(rawValue),
+              disabled: readOnly || state.busy,
+              'aria-label': configFieldLabel(t, field),
+              onChange: function (event) {
+                var text = event && event.target ? event.target.value : ''
+                config.setField(key, text === '' ? '' : Number(text))
+              },
+            })
+          } else {
+            control = h('input', {
+              className: 'daw-input',
+              type: 'text',
+              value: rawValue === undefined || rawValue === null ? '' : String(rawValue),
+              disabled: readOnly || state.busy,
+              spellCheck: false,
+              autoComplete: 'off',
+              'aria-label': configFieldLabel(t, field),
+              onChange: function (event) {
+                config.setField(key, event && event.target ? event.target.value : '')
+              },
+            })
+          }
+          const description = configFieldDescription(t, field)
+          rows.push(
+            h(
+              'div',
+              { className: 'daw-form-row', key: key, 'data-field': key },
+              h('label', { className: 'daw-form-label' }, configFieldLabel(t, field)),
+              h('div', { className: 'daw-form-control' }, control),
+              description ? h('p', { className: 'daw-form-desc' }, description) : null,
+            ),
+          )
+        }
+      }
+
+      var statusText = settingsStatusText(t, state)
+      var statusClass = 'daw-form-status daw-form-status-' + (state.status || 'saved')
+      var dirty = descriptor ? buildConfigPatch(descriptor, state.draft) !== null : false
+
+      var body
+      if (state.phase === 'loading' && !descriptor) {
+        body = h('p', { className: 'daw-note' }, h('span', { className: 'daw-spin', 'aria-hidden': 'true' }), ' ', t('settings.loading'))
+      } else if (state.status === 'unavailable' && !descriptor) {
+        body = h('p', { className: 'daw-note' }, t('settings.unavailable'))
+      } else if (state.phase === 'error' && !descriptor) {
+        body = h(
+          'div',
+          null,
+          h('div', { className: 'daw-error', role: 'alert' }, t('settings.loadError', { message: state.message || t('settings.unknown') })),
+          h('div', { className: 'daw-actions' }, h('button', { type: 'button', className: 'daw-button', onClick: config.reload }, t('settings.retry'))),
+        )
+      } else {
+        body = h(
+          'div',
+          { className: 'daw-form', 'aria-busy': state.busy ? 'true' : 'false' },
+          rows,
+          h(
+            'div',
+            { className: 'daw-form-footer' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'daw-button daw-button-primary',
+                disabled: readOnly || state.busy || !dirty,
+                onClick: config.save,
+                'data-action': 'save',
+              },
+              state.busy ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
+              t('settings.save'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'daw-button',
+                disabled: readOnly || state.busy,
+                onClick: config.reset,
+                'data-action': 'reset',
+              },
+              t('settings.reset'),
+            ),
+            readOnly ? h('span', { className: 'daw-form-status daw-form-status-unavailable' }, t('settings.readOnly')) : null,
+            statusText ? h('span', { className: statusClass, role: 'status', 'data-status': state.status }, statusText) : null,
+          ),
+        )
+      }
+
+      return h(
+        'section',
+        { className: 'daw-config', 'aria-label': t('settings.edit.title'), 'data-dsh-codex-worktree-config': SETTINGS_NS },
+        h('h3', { className: 'daw-block-title' }, t('settings.edit.title')),
+        body,
+      )
     }
 
     function WorktreeSettings(props) {
@@ -1859,7 +3016,6 @@ window.__ModuleLoader__.load({
       var setNotice = noticePair[1]
 
       var language = activeLanguage()
-      var config = state.config || EMPTY_CONFIG
       var total = countRecords(state.repos)
       var loading = state.phase === 'loading' || state.phase === 'refreshing'
 
@@ -1924,30 +3080,6 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function startChat(record, key) {
-        if (busy) return
-        if (!record.path) {
-          fail(key, t('settings.newChatFailed', { message: t('settings.unknown') }))
-          return
-        }
-        setBusy('new:' + key)
-        clearMessages()
-        Promise.resolve()
-          .then(function () {
-            return createSessionIn(ctxRef.current, record.path)
-          })
-          .then(
-            function () {
-              setBusy('')
-            },
-            function (error) {
-              setBusy('')
-              var message = error && error.code === 'controllers-unavailable' ? t('settings.controllersUnavailable') : messageOf(error)
-              fail(key, t('settings.newChatFailed', { message: message }))
-            },
-          )
-      }
-
       function runDelete(record, key, force) {
         if (busy) return
         var api = apiRef.current
@@ -2009,47 +3141,15 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      var configBlock = h(
-        'section',
-        { className: 'daw-config', 'aria-label': t('settings.config.title') },
-        h('h3', { className: 'daw-config-title' }, t('settings.config.title')),
+      var managementHeader = h(
+        'div',
+        { className: 'daw-toolbar', style: { marginTop: '18px', marginBottom: '8px' } },
+        h('h3', { className: 'daw-block-title', style: { margin: 0, flex: '1' } }, t('settings.management.title')),
         h(
-          'dl',
-          { className: 'daw-config-grid' },
-          h(
-            React.Fragment,
-            { key: 'root' },
-            h('dt', { className: 'daw-fact-label' }, t('settings.config.root')),
-            h('dd', { className: 'daw-fact-value' }, h('code', { className: 'daw-code', title: configRootText(t, config) }, configRootText(t, config))),
-          ),
-          h(
-            React.Fragment,
-            { key: 'fetch' },
-            h('dt', { className: 'daw-fact-label' }, t('settings.config.fetchBeforeCreate')),
-            h('dd', { className: 'daw-fact-value' }, onOff(t, config.fetchBeforeCreate)),
-          ),
-          h(
-            React.Fragment,
-            { key: 'prune' },
-            h('dt', { className: 'daw-fact-label' }, t('settings.config.autoPrune')),
-            h(
-              'dd',
-              { className: 'daw-fact-value' },
-              onOff(t, config.autoPrune),
-              config.autoPrune && config.autoPruneKeep !== null ? h('span', { className: 'daw-meta' }, ' \u00b7 ' + t('settings.config.autoPruneKeep', { count: String(config.autoPruneKeep) })) : null,
-            ),
-          ),
-        ),
-        h('p', { className: 'daw-note' }, t('settings.config.hint')),
-        h(
-          'div',
-          { className: 'daw-actions' },
-          h(
-            'button',
-            { type: 'button', className: 'daw-button', disabled: busy !== '' || loading, onClick: runPrune },
-            busy === 'prune' ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
-            busy === 'prune' ? t('settings.prune.busy') : t('settings.prune.action'),
-          ),
+          'button',
+          { type: 'button', className: 'daw-button', disabled: busy !== '' || loading, onClick: runPrune, 'data-action': 'prune' },
+          busy === 'prune' ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
+          busy === 'prune' ? t('settings.prune.busy') : t('settings.prune.action'),
         ),
       )
 
@@ -2084,46 +3184,12 @@ window.__ModuleLoader__.load({
             const isConfirming = confirmKey === key
             const isForcing = forceKey === key
             const isBusy = busy === 'delete:' + key
-            const isStarting = busy === 'new:' + key
             const isDetached = record.mode === DETACHED_MODE || (!record.mode && !record.branch)
             const modeText = isDetached
               ? t('settings.mode.detached')
               : record.branch || (record.mode === BRANCH_MODE ? t('settings.mode.branch') : record.mode || t('settings.unknown'))
             const createdText = record.createdAt !== undefined && record.createdAt !== null ? formatDate(record.createdAt, language) : ''
             const dirtyCount = typeof record.dirty === 'number' ? record.dirty : null
-
-            const actions = h(
-              'div',
-              { className: 'daw-wt-actions' },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'daw-button',
-                  disabled: busy !== '' || !record.path,
-                  onClick: function () {
-                    startChat(record, key)
-                  },
-                },
-                isStarting ? h('span', { className: 'daw-spin', 'aria-hidden': 'true' }) : null,
-                isStarting ? t('settings.newChat.busy') : t('settings.newChat'),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'daw-button daw-button-danger',
-                  disabled: busy !== '' || !record.sessionId,
-                  title: record.sessionId ? t('settings.delete') : t('settings.noSession'),
-                  onClick: function () {
-                    setConfirmKey(key)
-                    setForceKey('')
-                    clearMessages()
-                  },
-                },
-                t('settings.delete'),
-              ),
-            )
 
             const conversations = record.sessionId
               ? h(
@@ -2202,7 +3268,25 @@ window.__ModuleLoader__.load({
                     : null,
                   rowError && rowError.key === key ? h('div', { className: 'daw-error', role: 'alert' }, rowError.message) : null,
                 ),
-                actions,
+                h(
+                  'div',
+                  { className: 'daw-wt-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'daw-button daw-button-danger',
+                      disabled: busy !== '' || !record.sessionId,
+                      title: record.sessionId ? t('settings.delete') : t('settings.noSession'),
+                      onClick: function () {
+                        setConfirmKey(key)
+                        setForceKey('')
+                        clearMessages()
+                      },
+                    },
+                    t('settings.delete'),
+                  ),
+                ),
               ),
             )
           }
@@ -2246,7 +3330,8 @@ window.__ModuleLoader__.load({
         'section',
         { className: 'daw-settings', 'aria-label': t('settings.title'), 'data-dsh-codex-worktree-settings': SECTION_ID },
         header,
-        configBlock,
+        h(ConfigForm, { api: props.api }),
+        managementHeader,
         content,
         rowError && rowError.key === 'prune' ? h('div', { className: 'daw-error', role: 'alert' }, rowError.message) : null,
         notice ? h('div', { className: 'daw-notice', role: 'status' }, notice) : null,
@@ -2303,6 +3388,54 @@ window.__ModuleLoader__.load({
         return installLocale(resolveLocale(ctx))
       }, PLUGIN_NAME + ': locale')
 
+      // One shared Session-projection store feeds the chip, the progress card and
+      // the sidebar marker; it is refreshed only from the sessions list event.
+      ctx.effect(function () {
+        return installProjectionStore(ctx)
+      }, PLUGIN_NAME + ': session projection store')
+
+      registerSlot(
+        ctx,
+        'conversation.hero.options',
+        {
+          name: 'conversation.hero.options',
+          id: PLACEMENT_ID,
+          order: 10,
+          locale: LOCALE_NS,
+          inject: function () {
+            return { api: api, ctx: ctx }
+          },
+        },
+        PlacementEntry,
+      )
+
+      registerSlot(
+        ctx,
+        'conversation.input.dock',
+        {
+          name: 'conversation.input.dock',
+          id: PROGRESS_ID,
+          order: 30,
+          locale: LOCALE_NS,
+          inject: function () {
+            return { api: api, ctx: ctx }
+          },
+        },
+        ProgressEntry,
+      )
+
+      registerSlot(
+        ctx,
+        'sidebar.session.row.leading',
+        {
+          name: 'sidebar.session.row.leading',
+          id: MARKER_ID,
+          order: 20,
+          locale: LOCALE_NS,
+        },
+        MarkerEntry,
+      )
+
       registerSlot(
         ctx,
         'conversation.session.header.utilities',
@@ -2316,24 +3449,6 @@ window.__ModuleLoader__.load({
           },
         },
         ChipEntry,
-      )
-
-      registerSlot(
-        ctx,
-        'conversation.input.dock',
-        {
-          name: 'conversation.input.dock',
-          id: DOCK_ID,
-          order: 20,
-          locale: LOCALE_NS,
-          label: function () {
-            return translate('dock.new')
-          },
-          inject: function () {
-            return { api: api, ctx: ctx }
-          },
-        },
-        DockEntry,
       )
 
       registerSlot(

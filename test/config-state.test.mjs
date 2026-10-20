@@ -3,12 +3,14 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolveConfig } from '../lib/config.js'
-import { coerceState, createStateStore, emptyState, resolveDshHome, statePathFor } from '../lib/state.js'
+import { EDITABLE_FIELDS, editableDefaults, resolveConfig, resolvePlacement } from '../lib/config.js'
+import { PLACEMENT_TTL_MS } from '../lib/constants.js'
+import { coerceState, createStateStore, emptyState, placementKey, resolveDshHome, statePathFor } from '../lib/state.js'
 
 test('resolveConfig fills every documented default', () => {
   const config = resolveConfig({})
   assert.equal(config.enabled, true)
+  assert.equal(config.defaultPlacement, 'worktree')
   assert.equal(config.directory, '.agents/worktrees')
   assert.equal(config.mode, 'detached')
   assert.equal(config.namePrefix, 'wt-')
@@ -29,7 +31,56 @@ test('resolveConfig fills every documented default', () => {
   assert.equal(config.gitCommand, 'git')
 })
 
+test('resolvePlacement accepts only the two documented values', () => {
+  assert.equal(resolvePlacement(undefined), 'worktree')
+  assert.equal(resolvePlacement(''), 'worktree')
+  assert.equal(resolvePlacement('local'), 'local')
+  assert.equal(resolvePlacement('worktree'), 'worktree')
+  assert.throws(() => resolvePlacement('server'), /placement must be/)
+})
+
+test('editable metadata and defaults agree with resolveConfig', () => {
+  const defaults = editableDefaults()
+  assert.equal(EDITABLE_FIELDS.length, 20)
+  assert.deepEqual(
+    EDITABLE_FIELDS.map((field) => field.key),
+    [
+      'enabled',
+      'defaultPlacement',
+      'directory',
+      'root',
+      'mode',
+      'namePrefix',
+      'branchPrefix',
+      'baseRef',
+      'fetchBeforeCreate',
+      'autoPrune',
+      'autoPruneKeep',
+      'pruneGraceMs',
+      'poolGitignore',
+      'gitTimeoutMs',
+      'skipChildAgents',
+      'skipSessionIdPatterns',
+      'skipPresets',
+      'disableMarker',
+      'maxPerRepo',
+      'noticeOnCreate',
+    ],
+  )
+  const config = resolveConfig({})
+  for (const field of EDITABLE_FIELDS) {
+    assert.deepEqual(defaults[field.key], config[field.key], field.key)
+    assert.ok(['boolean', 'number', 'text', 'lines', 'select'].includes(field.type), field.key)
+    assert.equal(typeof field.description, 'string')
+  }
+  // Internal fields never appear in the form.
+  assert.equal(Object.hasOwn(defaults, 'gitCommand'), false)
+  assert.equal(Object.hasOwn(defaults, 'cleanupOnDispose'), false)
+  assert.deepEqual(editableDefaults(), editableDefaults())
+})
+
 test('resolveConfig rejects unusable values loudly', () => {
+  assert.throws(() => resolveConfig({ defaultPlacement: 'server' }), /placement must be/)
   assert.throws(() => resolveConfig({ directory: '/abs' }), /relative/)
   assert.throws(() => resolveConfig({ directory: 'a/../b' }), /dot segments/)
   assert.throws(() => resolveConfig({ mode: 'weird' }), /mode must be/)
@@ -65,6 +116,62 @@ test('coerceState drops unknown shapes and malformed records', () => {
     },
   })
   assert.deepEqual(Object.keys(state.records), ['a'])
+  assert.deepEqual(state.placements, {})
+  assert.equal(state.schemaVersion, 2)
+})
+
+test('coerceState migrates a v1 document and validates placement rows', () => {
+  const { state } = coerceState({
+    schemaVersion: 1,
+    records: { a: { path: '/p', repoRoot: '/r' } },
+    placements: {
+      '/repo': { mode: 'local', updatedAt: '2026-01-01T00:00:00.000Z' },
+      '/bad': { mode: 'server' },
+      '': { mode: 'worktree' },
+    },
+  })
+  assert.equal(state.schemaVersion, 2)
+  assert.deepEqual(Object.keys(state.records), ['a'])
+  assert.deepEqual(Object.keys(state.placements), ['/repo'])
+  assert.equal(state.placements['/repo'].mode, 'local')
+})
+
+test('the store remembers one placement per canonical workspace path', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dwt-state-'))
+  const store = createStateStore(join(dir, 'state.json'))
+  assert.equal(await store.getPlacement('/repo'), null)
+  assert.equal(await store.getPlacement(''), null)
+  await store.setPlacement('/repo/', 'local')
+  assert.deepEqual((await store.getPlacement('/repo'))?.mode, 'local')
+  assert.equal(placementKey('/repo///'), '/repo')
+  assert.deepEqual((await store.placements()).map((row) => row.workspacePath), ['/repo'])
+  await assert.rejects(() => store.setPlacement('', 'local'), /workspacePath is required/)
+  await assert.rejects(() => store.setPlacement('/repo', 'server'), /placement must be/)
+
+  // A v1 sidecar on disk is adopted and rewritten with placements.
+  const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
+  assert.equal(raw.schemaVersion, 2)
+  assert.equal(raw.placements['/repo'].mode, 'local')
+})
+
+test('stale placements are dropped past the retention window', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dwt-state-'))
+  const file = join(dir, 'state.json')
+  const now = Date.now()
+  await writeFile(
+    file,
+    JSON.stringify({
+      schemaVersion: 2,
+      records: {},
+      placements: {
+        '/old': { mode: 'local', updatedAt: new Date(now - PLACEMENT_TTL_MS - 1000).toISOString() },
+        '/fresh': { mode: 'worktree', updatedAt: new Date(now).toISOString() },
+      },
+    }),
+    'utf8',
+  )
+  const store = createStateStore(file)
+  assert.deepEqual((await store.placements()).map((row) => row.workspacePath), ['/fresh'])
 })
 
 test('state store round-trips records atomically', async () => {

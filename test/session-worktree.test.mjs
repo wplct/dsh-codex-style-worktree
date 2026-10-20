@@ -1,8 +1,9 @@
 /**
  * Integration tests: real git repositories, real processes, fake DSH context.
  *
- * These cover the wave the plugin exists for: a new session gets its own
- * checkout automatically, without a name, and can be named or cleaned later.
+ * These cover the wave the plugin exists for: the user remembers a work
+ * location per workspace, sends the first prompt, and the checkout is created
+ * then — with every step published to the session projection.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,16 +16,40 @@ import { createRuntime } from '../lib/session-worktree.js'
 import { createStateStore } from '../lib/state.js'
 import { createAgent, createFakeCtx, git, makeRepo, makeTempDir } from './helpers.mjs'
 
+/** A projection publisher stand-in that records every published state. */
+export function recordingProjection(stateOfValue = undefined) {
+  const states = []
+  return {
+    states,
+    stateOf: () => stateOfValue,
+    publish(session, state) {
+      states.push(state)
+      return true
+    },
+    publishById() {
+      return false
+    },
+    clear(session) {
+      states.push(null)
+      return true
+    },
+    clearById() {
+      states.push(null)
+      return true
+    },
+  }
+}
+
 /** Build one isolated environment: repository + sidecar + runtime. */
-async function setup(overrides = {}) {
+async function setup(overrides = {}, projection = recordingProjection()) {
   const repo = await makeRepo()
   const stateDir = await makeTempDir()
   const config = resolveConfig({ directory: '.agents/worktrees', ...overrides })
   const { ctx, logs, roots } = createFakeCtx()
   const store = createStateStore(join(stateDir, 'state.json'))
   const gitApi = createGit(ctx, config)
-  const runtime = createRuntime({ ctx, config, store, git: gitApi })
-  return { repo, stateDir, config, ctx, logs, roots, store, gitApi, runtime }
+  const runtime = createRuntime({ ctx, config, store, git: gitApi, projection })
+  return { repo, stateDir, config, ctx, logs, roots, store, gitApi, runtime, projection }
 }
 
 const detach = async (env, agent) => env.runtime.ensureForAgent({ agent, source: 'startup' })
@@ -40,6 +65,7 @@ test('a new session gets its own detached checkout and enters it', async () => {
   const repo = await realpath(env.repo)
   assert.equal(record.mode, 'detached')
   assert.equal(record.branch, null)
+  assert.equal(record.placement, 'worktree')
   assert.equal(await realpath(record.repoRoot), repo)
   assert.equal(await realpath(record.workspaceRoot), repo)
   assert.equal(record.baseCommit, git(env.repo, ['rev-parse', 'HEAD']))
@@ -57,6 +83,72 @@ test('a new session gets its own detached checkout and enters it', async () => {
   // The session now works in the checkout, and the sidecar records it.
   assert.equal(env.ctx.workingDirectory.get(agent.session), record.path)
   assert.equal(await env.store.get(agent.session.id), record)
+
+  // The projection saw prepare → checkout → finalize → ready.
+  const states = env.projection.states
+  assert.equal(states.at(-1).phase, 'ready')
+  assert.equal(states.at(-1).path, record.path)
+  const creating = states.filter((state) => state !== null && state.phase === 'creating')
+  assert.deepEqual(
+    creating.map((state) => state.step),
+    ['prepare', 'checkout', 'finalize'],
+  )
+  assert.equal(creating[1].path, record.path)
+  assert.equal(creating[1].baseCommit, record.baseCommit)
+})
+
+test('a workspace remembered as local creates no checkout', async () => {
+  const env = await setup()
+  await env.store.setPlacement(env.repo, 'local')
+  const agent = createAgent(env.repo)
+  env.roots.push(agent)
+
+  const result = await detach(env, agent)
+  assert.equal(result.created, false)
+  assert.equal(result.reason, 'local-placement')
+  assert.equal(await env.store.get(agent.session.id), null)
+  assert.equal(existsSync(join(env.repo, '.agents')), false)
+  assert.equal(env.ctx.workingDirectory.get(agent.session), env.repo)
+  assert.deepEqual(env.projection.states, [])
+})
+
+test('defaultPlacement decides the value for a fresh workspace', async () => {
+  {
+    const env = await setup({ defaultPlacement: 'local' })
+    const agent = createAgent(env.repo)
+    env.roots.push(agent)
+    assert.equal((await detach(env, agent)).reason, 'local-placement')
+  }
+  {
+    const env = await setup()
+    const agent = createAgent(env.repo)
+    env.roots.push(agent)
+    assert.equal((await detach(env, agent)).created, true)
+  }
+})
+
+test('the remembered placement is read through placementFor/setPlacementFor', async () => {
+  const env = await setup()
+  const initial = await env.runtime.placementFor(env.repo)
+  assert.equal(initial.mode, 'worktree')
+  assert.equal(initial.defaultMode, 'worktree')
+  assert.equal(initial.isGit, true)
+  assert.equal(initial.workspacePath.endsWith(env.repo.split('/').pop()), true)
+
+  const written = await env.runtime.setPlacementFor(env.repo, 'local')
+  assert.equal(written.mode, 'local')
+  assert.equal((await env.runtime.placementFor(env.repo)).mode, 'local')
+  assert.equal((await env.store.getPlacement(env.repo)).mode, 'local')
+
+  await env.runtime.setPlacementFor(env.repo, 'worktree')
+  assert.equal((await env.runtime.placementFor(env.repo)).mode, 'worktree')
+
+  const outside = await makeTempDir()
+  const foreign = await env.runtime.placementFor(outside)
+  assert.equal(foreign.isGit, false)
+  await assert.rejects(() => env.runtime.setPlacementFor(outside, 'worktree'), (error) => error.code === 'not-git-repository')
+  // local is always allowed, even outside git.
+  assert.equal((await env.runtime.setPlacementFor(outside, 'local')).mode, 'local')
 })
 
 test('two sessions in the same second get distinct checkouts', async () => {
@@ -72,7 +164,7 @@ test('two sessions in the same second get distinct checkouts', async () => {
   assert.equal((await env.store.list()).length, 2)
 })
 
-test('a checkout with uncommitted work cannot be cleaned without force', async () => {
+test('a checkout with uncommitted work cannot be cleaned without force, and clean clears the projection', async () => {
   const env = await setup()
   const agent = createAgent(env.repo)
   env.roots.push(agent)
@@ -94,6 +186,7 @@ test('a checkout with uncommitted work cannot be cleaned without force', async (
   const remaining = git(env.repo, ['worktree', 'list', '--porcelain']).split('\n').filter((line) => line.startsWith('worktree '))
   assert.equal(remaining.length, 1)
   assert.equal(await env.store.get(agent.session.id), null)
+  assert.equal(env.projection.states.at(-1), null, 'cleanup publishes a null projection')
 })
 
 test('cleaning can delete the branch created by mode=branch', async () => {
@@ -123,6 +216,7 @@ test('non-git directories, missing commits, child agents, markers and switches s
     const agent = createAgent(outside)
     env.roots.push(agent)
     assert.equal((await detach(env, agent)).reason, 'not-git')
+    assert.deepEqual(env.projection.states, [], 'a non-git workspace is not an error card')
   }
   {
     const env = await setup()
@@ -132,6 +226,8 @@ test('non-git directories, missing commits, child agents, markers and switches s
     const agent = createAgent(repo)
     env.roots.push(agent)
     assert.equal((await detach(env, agent)).reason, 'no-commit')
+    assert.equal(env.projection.states.at(-1)?.phase, 'error')
+    assert.equal(env.projection.states.at(-1)?.step, 'prepare')
   }
   {
     const env = await setup()
@@ -159,6 +255,7 @@ test('non-git directories, missing commits, child agents, markers and switches s
     env.roots.push(first, second)
     assert.equal((await detach(env, first)).created, true)
     assert.equal((await detach(env, second)).reason, 'limit')
+    assert.equal(env.projection.states.at(-1)?.phase, 'error')
   }
 })
 
@@ -187,6 +284,15 @@ test('a recorded session is not entered twice, even by a fresh runtime', async (
 test('an unknown session id is ignored', async () => {
   const env = await setup()
   assert.equal((await env.runtime.ensureForAgent({ agent: { session: { id: '' } } })).reason, 'no-session')
+})
+
+test('a stale ready projection for a missing checkout is repaired to null', async () => {
+  const projection = recordingProjection({ phase: 'ready', path: '/definitely/not/here' })
+  const env = await setup({}, projection)
+  const agent = createAgent(env.repo)
+  env.roots.push(agent)
+  await detach(env, agent)
+  assert.equal(projection.states[0], null, 'repair appends a null state first')
 })
 
 test('an external root is refused when the session sandbox cannot write it', async () => {
@@ -260,77 +366,6 @@ test('pruning a detached checkout preserves its commits as a snapshot ref', asyn
   git(env.repo, ['update-ref', '-d', pruned.snapshots[0].ref])
 })
 
-test('the new-worktree button creates a checkout ahead of its session, which adopts it', async () => {
-  const env = await setup({ autoPrune: false })
-  const repo = await realpath(env.repo)
-
-  const record = await env.runtime.createCheckout({ repoPath: env.repo })
-  assert.equal(record.pending, true)
-  assert.match(record.sessionId, /^pending-/)
-  assert.equal(record.mode, 'detached')
-  assert.equal(record.branch, null)
-  assert.equal(await realpath(record.repoRoot), repo)
-  assert.equal(await realpath(record.path).then((p) => p.startsWith(join(repo, '.agents', 'worktrees'))), true)
-  assert.ok(existsSync(record.path), 'checkout directory exists')
-  assert.equal(await env.store.get(record.sessionId), record)
-
-  // The session that starts inside the checkout inherits the existing record.
-  const agent = createAgent(await realpath(record.path), 'session-button')
-  env.roots.push(agent)
-  const result = await detach(env, agent)
-  assert.equal(result.created, false)
-  assert.equal(result.reason, 'adopted')
-  assert.equal(result.record.sessionId, 'session-button')
-  assert.equal(result.record.pending, false)
-  assert.equal((await env.store.get('session-button'))?.path, record.path)
-  assert.equal(await env.store.get(record.sessionId), null)
-})
-
-test('createCheckout reports the failure reasons the button renders', async () => {
-  {
-    const env = await setup()
-    const outside = await makeTempDir()
-    await assert.rejects(
-      () => env.runtime.createCheckout({ repoPath: outside }),
-      (error) => error.code === 'not-git-repository',
-    )
-  }
-  {
-    const env = await setup({ enabled: false })
-    await assert.rejects(
-      () => env.runtime.createCheckout({ repoPath: env.repo }),
-      (error) => error.code === 'disabled',
-    )
-  }
-  {
-    const env = await setup()
-    const repo = await makeRepo()
-    await rm(join(repo, '.git'), { recursive: true, force: true })
-    git(repo, ['init', '-q', '-b', 'main'])
-    await assert.rejects(
-      () => env.runtime.createCheckout({ repoPath: repo }),
-      (error) => error.code === 'no-commit',
-    )
-  }
-  {
-    const env = await setup({ maxPerRepo: 1 })
-    await env.runtime.createCheckout({ repoPath: env.repo })
-    await assert.rejects(
-      () => env.runtime.createCheckout({ repoPath: env.repo }),
-      (error) => error.code === 'limit-reached',
-    )
-  }
-})
-
-test('createCheckout respects the per-repository disable marker', async () => {
-  const env = await setup()
-  await writeFile(join(env.repo, '.dsh-codex-worktree-off'), '', 'utf8')
-  await assert.rejects(
-    () => env.runtime.createCheckout({ repoPath: env.repo }),
-    (error) => error.code === 'disabled',
-  )
-})
-
 test('a Cordis context that throws on uninjected services still creates a worktree', async () => {
   const repo = await makeRepo()
   const stateDir = await makeTempDir()
@@ -345,14 +380,9 @@ test('a Cordis context that throws on uninjected services still creates a worktr
     })
   }
   const store = createStateStore(join(stateDir, 'state.json'))
-  const runtime = createRuntime({ ctx, config, store, git: createGit(ctx, config) })
+  const runtime = createRuntime({ ctx, config, store, git: createGit(ctx, config), projection: recordingProjection() })
   const agent = createAgent(repo)
   roots.push(agent)
   const result = await runtime.ensureForAgent({ agent, source: 'startup' })
   assert.equal(result.created, true, JSON.stringify(result))
-
-  // The agentless `create` path (composer button) must survive the same guard.
-  const second = await runtime.createCheckout({ repoPath: repo })
-  assert.equal(second.pending, true)
-  assert.ok(existsSync(second.path))
 })

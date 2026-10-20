@@ -6,8 +6,9 @@
  * This script recreates that situation in a temp directory — copied plugin plus
  * minimal peer stubs — then mounts the plugin against a fake DSH context and
  * drives one `agent/created` through a real repository. It catches import-path
- * mistakes, export-shape mistakes, tool/command/route registration mistakes and
- * an `apply()` that throws, none of which unit tests of pure modules can see.
+ * mistakes, export-shape mistakes — command/route/projection/settings
+ * registration mistakes and an `apply()` that throws, none of which unit tests
+ * of pure modules can see.
  *
  * Usage: node scripts/smoke-host.mjs
  */
@@ -46,7 +47,7 @@ try {
     join(stubs, 'schemastery', 'index.js'),
     `const chain = () => {
   const schema = {}
-  for (const method of ['default', 'description', 'min', 'max']) schema[method] = () => schema
+  for (const method of ['default', 'description', 'min', 'max', 'volatile', 'required', 'hidden']) schema[method] = () => schema
   return schema
 }
 const z = {
@@ -140,8 +141,74 @@ export default z
     },
   }
 
-  const captured = { listeners: new Map(), tools: [], commands: [], routes: [], effects: [] }
+  const captured = {
+    listeners: new Map(),
+    tools: [],
+    commands: [],
+    routes: [],
+    effects: [],
+    projection: undefined,
+    projectionConfigure: undefined,
+    settingsConfigure: undefined,
+  }
   const roots = []
+  const settingsValues = {
+    enabled: true,
+    defaultPlacement: 'worktree',
+    directory: '.agents/worktrees',
+    root: '',
+    mode: 'detached',
+    namePrefix: 'wt-',
+    branchPrefix: 'wt/',
+    baseRef: 'HEAD',
+    fetchBeforeCreate: false,
+    autoPrune: true,
+    autoPruneKeep: 15,
+    pruneGraceMs: 60000,
+    poolGitignore: true,
+    gitTimeoutMs: 20000,
+    skipChildAgents: true,
+    skipSessionIdPatterns: ['^session-taskboard-'],
+    skipPresets: [],
+    disableMarker: '.dsh-codex-worktree-off',
+    maxPerRepo: 32,
+    noticeOnCreate: false,
+  }
+  const settingsService = {
+    revision: 3,
+    describe() {
+      return [
+        { ns: 'other-plugin', revision: 0, value: { nope: 1 } },
+        { ns: 'codex-worktree', revision: settingsService.revision, value: { ...settingsValues }, writable: true },
+      ]
+    },
+    async update(ns, patch, expectedRevision) {
+      if (expectedRevision !== settingsService.revision) {
+        const error = new Error('revision mismatch')
+        error.code = 'SETTINGS_CONFLICT'
+        error.expected = expectedRevision
+        error.actual = settingsService.revision
+        throw error
+      }
+      Object.assign(settingsValues, patch)
+      settingsService.revision += 1
+      return { ns, revision: settingsService.revision }
+    },
+    configure(presentation, owner) {
+      captured.settingsConfigure = { presentation, owner }
+      return () => undefined
+    },
+  }
+  const projectionService = {
+    register(definition) {
+      captured.projection = definition
+      return () => undefined
+    },
+    stateOf() {
+      return null
+    },
+  }
+  const extraServices = { settings: settingsService, sessionProjections: projectionService }
   const ctx = {
     logger: { info: () => undefined, warn: (message) => console.log(`  [warn] ${message}`) },
     subprocess,
@@ -162,18 +229,36 @@ export default z
         }
       },
     },
-    agents: { roots: () => [...roots] },
+    agents: {
+      roots: () => [...roots],
+      get: (id) => roots.find((agent) => agent.session?.id === id),
+    },
     workingDirectory: {
       get: (session) => session.__cwd ?? session.header.cwd,
       async set(agent, path) {
         agent.session.__cwd = path
       },
     },
+    get(name) {
+      if (extraServices[name] !== undefined) return extraServices[name]
+      try {
+        return ctx[name]
+      } catch {
+        return undefined
+      }
+    },
     on(name, callback) {
       captured.listeners.set(name, callback)
+      return () => undefined
     },
-    inject(_deps, callback) {
-      callback(ctx)
+    inject(deps, callback) {
+      const child = Object.create(ctx)
+      for (const dep of deps) {
+        const service = extraServices[dep] ?? ctx[dep]
+        if (service === undefined) throw new Error(`fake ctx has no service ${dep}`)
+        Object.defineProperty(child, dep, { value: service, configurable: true })
+      }
+      callback(child)
     },
     effect(fn) {
       captured.effects.push(fn())
@@ -182,6 +267,7 @@ export default z
     commands: { register: (command) => captured.commands.push(command) },
     connection: { fetch: { register: (route) => (captured.routes.push(route), () => undefined) } },
   }
+  Object.defineProperty(ctx, 'fiber', { value: { uid: 'fake-fiber' }, configurable: true })
 
   // Cordis throws on reading a service the plugin did not inject; the optional
   // sandbox services must be read defensively, never as `ctx.sandbox` directly.
@@ -206,11 +292,15 @@ export default z
   check('module exports required injects', Array.isArray(mod.inject) && mod.inject.includes('agents'))
   mod.apply(ctx, { directory: '.agents/worktrees', pruneGraceMs: 0, autoPrune: false })
   check('agent/created listener registered', captured.listeners.has('agent/created'))
+  check('volatile-update listener registered', captured.listeners.has('loader/volatile-update'))
   check('no model tool is registered', captured.tools.length === 0, String(captured.tools.length))
   check('2 slash commands registered', captured.commands.length === 2, String(captured.commands.length))
-  // The routes are the RPC surface of lib/constants.js: `create` is the manual
-  // creation used by the "New Worktree" button in the new-session composer.
-  const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'create']
+  check('codexWorktree projection registered', captured.projection?.key === 'codexWorktree', String(captured.projection?.key))
+  check('projection is client-visible (wire block)', captured.projection?.wire?.viewSchema !== undefined)
+  check('official auto settings form advertised', captured.settingsConfigure?.presentation?.auto === true)
+  // The routes are the RPC surface of lib/constants.js. `create` and `cancel` are
+  // deliberately absent: creation happens in agent/created, cancel is client-only.
+  const expectedEndpoints = ['status', 'clean', 'list', 'prune', 'placement', 'settings']
   check(
     `${expectedEndpoints.length} routes registered`,
     captured.routes.length === expectedEndpoints.length,
@@ -222,52 +312,111 @@ export default z
       captured.routes.some((route) => route.path === `/api/dsh-codex-worktree/${endpoint}`),
     )
   }
+  check('no create route', !captured.routes.some((route) => route.path.endsWith('/create')))
 
   // ---- 4. Drive one agent through the real lifecycle ---------------------
-  const agent = { id: 'session-smoke', session: { id: 'session-smoke', header: { cwd: repo }, append: () => undefined }, inject: () => undefined }
+  const appended = []
+  const agent = {
+    id: 'session-smoke',
+    session: {
+      id: 'session-smoke',
+      header: { cwd: repo },
+      append(type, data) {
+        appended.push({ type, data })
+      },
+    },
+    inject: () => undefined,
+  }
   roots.push(agent)
   await captured.listeners.get('agent/created')({ agent, source: 'startup', signal: undefined })
   const cwd = ctx.workingDirectory.get(agent.session)
   const { realpath } = await import('node:fs/promises')
   const expectedPool = join(await realpath(repo), '.agents', 'worktrees')
   check('session cwd moved into a worktree', (await realpath(cwd)).startsWith(expectedPool), cwd)
-  check('checkout exists', execFileSync('test', ['-d', cwd]) === undefined ? true : true)
   const worktrees = git(repo, ['worktree', 'list', '--porcelain'])
   check('checkout registered with git', worktrees.includes(cwd), worktrees)
   check('main checkout stays clean', git(repo, ['status', '--porcelain']) === '')
 
-  // ---- 5. Drive the client route through the envelope --------------------
-  const listRoute = captured.routes.find((route) => route.path === '/api/dsh-codex-worktree/list')
-  const response = await listRoute.fetch({
-    headers: { get: () => 'application/json' },
-    json: async () => ({ rpcId: 'rpc-1', method: 'dsh-codex-worktree/list', payload: {} }),
-  })
-  const body = await response.json()
-  check('list route answers the rpc envelope', body.type === 'server-response' && body.rpcId === 'rpc-1')
-  check('list route reports the repository group', body.result?.ok === true && body.result.value.repos.length === 1, JSON.stringify(body).slice(0, 300))
-  check('list route exposes config', body.result?.value?.config?.autoPruneKeep === 15, JSON.stringify(body.result?.value?.config))
-
-  // ---- 5b. Manual creation used by the new-session composer button -------
-  const createRoute = captured.routes.find((route) => route.path === '/api/dsh-codex-worktree/create')
-  const createResponse = await createRoute.fetch({
-    headers: { get: () => 'application/json' },
-    json: async () => ({ rpcId: 'rpc-2', method: 'dsh-codex-worktree/create', payload: { path: repo } }),
-  })
-  const created = (await createResponse.json()).result
-  check('create route answers the rpc envelope', created?.ok === true, JSON.stringify(created).slice(0, 300))
-  const createdPath = created?.value?.path
+  // The projection event stream drove the inline progress card.
+  const states = appended.filter((event) => event.type === 'codex-worktree/state').map((event) => event.data.state)
+  const creating = states.filter((state) => state !== null && state.phase === 'creating')
+  check('projection published 3 creating steps', creating.length === 3, JSON.stringify(creating.map((s) => s.step)))
   check(
-    'create route reports a checkout inside the pool',
-    typeof createdPath === 'string' && (await realpath(createdPath)).startsWith(expectedPool),
-    String(createdPath),
+    'projection steps are prepare → checkout → finalize',
+    creating.map((state) => state.step).join(',') === 'prepare,checkout,finalize',
+    creating.map((state) => state.step).join(','),
   )
-  let createdRepo = null
-  try {
-    createdRepo = await realpath(created?.value?.repoRoot ?? '/nonexistent')
-  } catch {
-    createdRepo = null
+  check('projection ends ready with the checkout path', states.at(-1)?.phase === 'ready' && states.at(-1)?.path === cwd, JSON.stringify(states.at(-1)))
+  check(
+    'every published state passes the registered schema',
+    states.every((state) => {
+      try {
+        captured.projection.stateSchema.parse(state)
+        return true
+      } catch {
+        return false
+      }
+    }),
+  )
+
+  // ---- 5. Drive the client routes through the envelope -------------------
+  const call = async (endpoint, payload, rpcId = `rpc-${endpoint}`) => {
+    const route = captured.routes.find((candidate) => candidate.path === `/api/dsh-codex-worktree/${endpoint}`)
+    const response = await route.fetch({
+      headers: { get: () => 'application/json', },
+      json: async () => ({ rpcId, method: `dsh-codex-worktree/${endpoint}`, payload }),
+    })
+    return (await response.json()).result
   }
-  check('create route maps the repository root', createdRepo === (await realpath(repo)), String(created?.value?.repoRoot))
+
+  const list = await call('list', {})
+  check('list route answers the rpc envelope', list?.ok === true, JSON.stringify(list).slice(0, 300))
+  check('list route reports the repository group', list?.value?.repos?.length === 1, JSON.stringify(list).slice(0, 300))
+  check('list route exposes config', list?.value?.config?.autoPruneKeep === 15, JSON.stringify(list?.value?.config))
+
+  const status = await call('status', { sessionId: 'session-smoke' })
+  check('status reports the managed checkout', status?.ok === true && status.value.managed === true && status.value.path === cwd, JSON.stringify(status).slice(0, 300))
+
+  const placementRead = await call('placement', { workspacePath: repo })
+  check(
+    'placement read answers worktree/isGit',
+    placementRead?.ok === true && placementRead.value.mode === 'worktree' && placementRead.value.defaultMode === 'worktree' && placementRead.value.isGit === true,
+    JSON.stringify(placementRead).slice(0, 300),
+  )
+  const placementWrite = await call('placement', { workspacePath: repo, mode: 'local' })
+  check('placement write persists local', placementWrite?.ok === true && placementWrite.value.mode === 'local', JSON.stringify(placementWrite).slice(0, 300))
+  const placementAgain = await call('placement', { workspacePath: repo })
+  check('placement read echoes the stored value', placementAgain?.value?.mode === 'local', JSON.stringify(placementAgain).slice(0, 300))
+  check(
+    'placement write rejects worktree outside git',
+    (await call('placement', { workspacePath: join(workspace, 'nope'), mode: 'worktree' })).error?.code === 'not-git-repository',
+  )
+
+  // A second session in a local workspace creates nothing.
+  const localAgent = {
+    id: 'session-local',
+    session: { id: 'session-local', header: { cwd: repo }, append: () => undefined },
+    inject: () => undefined,
+  }
+  roots.push(localAgent)
+  await captured.listeners.get('agent/created')({ agent: localAgent, source: 'startup', signal: undefined })
+  check('local placement leaves the session in the workspace', ctx.workingDirectory.get(localAgent.session) === repo)
+
+  // ---- 5b. Settings bridge ------------------------------------------------
+  const settingsGet = await call('settings', { action: 'get' })
+  check('settings get answers this plugin namespace', settingsGet?.ok === true && settingsGet.value.ns === 'codex-worktree', JSON.stringify(settingsGet).slice(0, 300))
+  check('settings get returns 20 editable fields', settingsGet?.value?.fields?.length === 20, String(settingsGet?.value?.fields?.length))
+  check('settings get returns defaults', settingsGet?.value?.defaults?.defaultPlacement === 'worktree')
+  check('settings get hides internal fields', !('gitCommand' in settingsGet.value.values))
+  const settingsSet = await call('settings', { action: 'set', patch: { enabled: false }, revision: settingsGet.value.revision })
+  check('settings set returns the new revision', settingsSet?.ok === true && settingsSet.value.revision === settingsGet.value.revision + 1, JSON.stringify(settingsSet).slice(0, 300))
+  check('settings set applied the value live', settingsValues.enabled === false && settingsSet.value.values.enabled === false)
+  const stale = await call('settings', { action: 'set', patch: { enabled: true }, revision: settingsGet.value.revision })
+  check('stale revision maps to conflict', stale?.error?.code === 'conflict' && stale.error.details?.actual === settingsSet.value.revision, JSON.stringify(stale).slice(0, 300))
+  const invalid = await call('settings', { action: 'set', patch: { mode: 'weird' }, revision: settingsSet.value.revision })
+  check('invalid value maps to invalid-config', invalid?.error?.code === 'invalid-config', JSON.stringify(invalid).slice(0, 300))
+  const reset = await call('settings', { action: 'reset', revision: settingsSet.value.revision })
+  check('settings reset restores defaults', reset?.ok === true && reset.value.values.enabled === true, JSON.stringify(reset).slice(0, 300))
 
   // ---- 6. The checkout stays detached; Git owns branch naming ------------
   check('checkout is detached', (() => {
@@ -284,6 +433,12 @@ export default z
   const detachedHead = git(cwd, ['rev-parse', 'HEAD'])
   check('commits land on the detached HEAD', detachedHead.length === 40, detachedHead)
   check('plugin created no branch', git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads']).split('\n').filter((line) => line.length > 0).length === 1, git(repo, ['branch']))
+
+  // The sidecar v2 keeps records and placements side by side.
+  const sidecar = JSON.parse(await readFile(join(dshHome, 'dsh-codex-worktree', 'state.json'), 'utf8'))
+  check('sidecar is schema v2', sidecar.schemaVersion === 2, String(sidecar.schemaVersion))
+  check('sidecar keeps the session record', sidecar.records['session-smoke']?.path === cwd)
+  check('sidecar keeps the workspace placement', Object.values(sidecar.placements)[0]?.mode === 'local', JSON.stringify(sidecar.placements))
 } finally {
   await rm(workspace, { recursive: true, force: true })
 }

@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex-worktree",
-  "version": "0.2.2",
-  "description": "Codex 风格 Worktree for DeepSeek Harness: every new session in a Git repository automatically gets its own detached checkout and works there, with a one-click \"新建 Worktree\" button and a worktree settings page. No naming required — the branch name is owned by Git at commit time.",
+  "version": "0.3.0",
+  "description": "Codex 风格 Worktree for DeepSeek Harness: choose 本地 / 新建本地工作树 per workspace on the new-session row; the checkout is created after the first prompt, its three steps stream through a session projection into an inline progress card, and the sidebar marks managed sessions read-only. Settings are editable in place and apply live. No naming — the branch belongs to Git at commit time.",
   "license": "MIT",
   "author": "wplct",
   "keywords": [
@@ -12,7 +12,9 @@
     "worktree",
     "agent",
     "codex",
-    "codex-worktree"
+    "codex-worktree",
+    "session-projection",
+    "settings"
   ],
   "type": "module",
   "main": "./lib/index.js",
@@ -53,8 +55,6 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1",
-    "@deepseek-ai/dsh-commands": ">=0.2.0-rc.1",
     "@deepseek-ai/dsh-client-connection": ">=0.2.0-rc.1",
     "@deepseek-ai/dsh-settings": ">=0.2.0-rc.1"
   },

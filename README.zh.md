@@ -1,103 +1,148 @@
 # Codex 风格 Worktree（dsh-codex-worktree）
 
-> DSH 会话的「默认就在 worktree 里干活」：新会话自动在仓库内部建一个隔离检出，并把会话工作目录切过去。人不需要起名、不需要点按钮；插件从不创建分支（检出始终是 detached HEAD），分支名完全交给 Git 在提交/推送时决定。也可以在新会话输入框点「新建 Worktree」手动开一个检出。
+> 给 DSH 会话一个「像 Codex 一样」的工作位置选择：新会话首屏在工作区旁边选 **本地** 还是 **新建本地工作树**（默认）；发送第一条消息后自动建一个 detached 检出并把**本次会话**的 cwd 切进去。不新增 Workspace、不需要命名、插件不建分支（分支名由 Git 在提交时决定）。
 
-- 包名 / 插件 id / loader row name：`dsh-codex-worktree`（host 半边 + 浏览器半边；profile patch 里的 row id 是 `codex-worktree`）
+- 版本：`0.3.0`（包 / 插件 id / loader row name：`dsh-codex-worktree`；profile patch 里的 insert row id：`codex-worktree`）
 - API 命名空间：`/api/dsh-codex-worktree`、RPC 方法前缀 `dsh-codex-worktree/`；侧车：`$DSH_HOME/dsh-codex-worktree/state.json`；禁用标记：`.dsh-codex-worktree-off`
 - GitHub：<https://github.com/wplct/dsh-codex-worktree>
-- 兼容：DSH `0.2.0-rc.2` / `0.2.1-rc.2`（见 `package.json` 的 `dsh.compatibility`）
+- 要求：DSH `0.2.0-rc.2` / `0.2.1-rc.2`、Node.js `>= 22.19.0`、`git` 在 PATH 里
 - 许可：MIT
+
+## 0.3.0 与 0.2.x 的差异
+
+| 能力 | 0.2.x | 0.3.0 |
+| --- | --- | --- |
+| 何时建树 | 新会话自动建（无选择）；另有「新建 Worktree」按钮立即建 | 首屏选择工作位置；**发送第一条消息后**（`agent/created`）才建 |
+| 选择器位置 | 输入框上方的 dock 按钮 | 新会话工作区行：`📁 工作区 ▼` 与 `标准模式 ▼` 之间的胶囊按钮 |
+| 选择记忆 | 无 | **按工作区**长期记住（侧车 `placements`），重启安全 |
+| 工作区 | 旧按钮会 `workspaces.create`，侧边栏变乱 | **绝不新增 Workspace**，只切当前会话 cwd |
+| 进度反馈 | 无 | 输入框上方内联三步进度卡（投影驱动，最少 1s） |
+| 侧边栏 | 无标记 | 托管会话显示**只读**工作树图标（tooltip = 检出路径） |
+| 设置页 | 配置只读 | **可编辑表单**，保存写入活动 profile patch 并热生效（volatile，不重启） |
+| 状态同步 | 部分 RPC 读取 | 全部事件/投影驱动，**零轮询** |
+| RPC | 含 `create` 等 | `status/list/clean/prune/placement/settings`，无 `create`/`cancel` |
 
 ## 1. 它做什么
 
-在 Git 仓库里开一个新会话（顶层 agent）时，插件自动：
+1. 新会话首屏（还没有会话 id 的 blank 状态）在工作区行显示「工作位置」胶囊：**新建本地工作树**（默认）或 **本地**；
+2. 选择立即写回宿主，**按工作区路径**持久化到侧车；该工作区以后的新会话都沿用，重启不丢；
+3. 你发送第一条消息 → DSH 创建 Session 并触发 `agent/created`（模型尚未开始）→ 宿主按该工作区的 placement 决定是否建树；
+4. 选择「新建本地工作树」时：在 `<repo>/.agents/worktrees/wt-<时间戳>` 建一个 **detached HEAD** 检出，把**本次会话**的工作目录切过去；会话仍挂在原来的 Workspace 下；
+5. 创建过程通过会话投影 `codexWorktree` 实时推送到输入框上方的内联进度卡（`准备工作空间 → 检出文件 → 设置环境`），完成后卡片淡出，chip 与侧边栏标记出现；
+6. 选择「本地」时：不建任何东西，会话就在原 Workspace 目录里跑；
+7. 插件**不创建分支、不做命名、不合并、不推送、不删除你的分支**。分支名由 Git 在提交时决定；需要分支时用普通 `git switch -c`。`mode: branch` 可让插件创建时顺手建 `<branchPrefix><名字>` 分支（非默认）。
 
-1. 以 `baseRef`（默认 `HEAD`）为起点，在仓库内的 `.agents/worktrees/` 池里创建 `wt-YYMMDD-HHMMSS` 形式的检出；
-2. 默认用 **detached HEAD** 创建（`mode: detached`，Codex 托管 worktree 的做法）：插件**不创建任何分支**，分支名由 Git 在提交/推送时决定；
-3. 把该会话的工作目录（cwd 上下文）切到新检出，模型后续的读写、`bash`、相对路径都发生在里面；
-4. 在 `$DSH_HOME/dsh-codex-worktree/state.json` 侧车里记录这次创建，用于 `/wt-status`、`/wt-clean` 和断点恢复（resume）。
+## 2. 交互
 
-零人工命名：
+### 2.1 新会话首屏：工作位置选择器
 
-| 环节 | 谁决定 |
+位置：官方 **`conversation.hero.options`** 座位——新会话首屏那一行里、工作区与模式控件之后的紧凑选项区（右对齐），只在 blank 新会话的 Session 存在后渲染。它和 `📁 工作区 ▼`、`标准模式 ▼` 在同一行：
+
+```text
+📁 shian360 ▼      标准模式 ▼        ⑂ 新建本地工作树 ▼
+┌────────────────────────────────────────────────────┐
+│ 描述你想要构建的内容，/ 调用指令，@ 文件或……        │
+└────────────────────────────────────────────────────┘
+```
+
+- 选项（单选，当前项带勾）：
+  - `本地` / `Local` —— 在当前工作区目录直接运行；
+  - `新建本地工作树` / `New local worktree` —— 在新检出中运行（**默认**）；
+  - 菜单底部灰色说明：`新建本地工作树不会新增工作区，只切换本次会话的工作目录。`
+- 显示条件：仅 **blank 新会话首屏**（该座位是 session 作用域，Session 创建后才会渲染）；非 Git 工作区隐藏（宿主返回 `isGit=false`）；已有会话不显示。
+- 槽位说明：这是官方 list 座位，**不是** shipped WorkspacePicker 的 `conversation.hero.workspace`（那个座位是 `kind: "single"`、由 WorkspacePicker 占用，注册进去会 shadow 官方工作区切换器）。本插件用它自己的 id 注册在 `conversation.hero.options`，**永不 shadow** 官方 UI。
+- 持久化：选择立即写回宿主（`placement` RPC），按工作区路径存入侧车；控件乐观更新，写入失败回滚并提示；读取失败时降级为只读展示默认值，不阻塞发消息。
+- 与配置的关系：选择器读写的是**按工作区的 placement**，不是 profile 配置；`defaultPlacement` 只决定「某工作区第一次出现、还没有记录时」的默认值。首次打开某工作区显示 `placements[path] ?? defaultPlacement`。
+
+### 2.2 发送第一条消息后创建
+
+1. 你发送第一条消息；
+2. DSH 创建 Session 并触发 `agent/created`（串行事件，模型尚未开始）；
+3. 宿主按该工作区 placement 决策：`local` → 不建；`worktree` → 依次执行 `准备工作空间`（建池目录 + 自忽略 `.gitignore`）→ `检出文件`（`git worktree add --detach`）→ `设置环境`（规范化路径、`workingDirectory.set`、写侧车记录）；
+4. 每个阶段都通过会话投影推送，客户端在输入框上方内联显示进度卡：
+
+```text
+┌────────────────────────────────────────────────────┐
+│ ⑂ 正在创建工作树                                    │
+│   ✓ 准备工作空间                                    │
+│   ◐ 检出文件                                        │
+│   ○ 设置环境                                        │
+│                                            取消     │
+└────────────────────────────────────────────────────┘
+```
+
+- 卡片**最少显示 1000ms**（创建通常 <0.5s）；完成后三步打勾 + `已创建工作树` 约 400ms 后淡出。
+- **只提供「取消」**：立即隐藏卡片，创建继续；插件**不做回滚**，也不提供「不使用工作树」补救功能。
+- 失败：卡片变错误态显示原因，会话按**原目录**继续、不阻塞对话。错误码：
+
+| 错误码 | 含义 |
 | --- | --- |
-| 目录名 | 插件自动生成（`namePrefix` + 时间戳，冲突自动加序号） |
-| 分支名 | **插件不建分支**：检出始终是 detached HEAD，分支名由 Git 在提交/推送时决定（`git switch -c`、`git commit` 后用 `git branch <name>` 等）；插件不提供命名入口 |
-| 建不建 | 插件按规则自动判断（见第 2 节） |
+| `not-git-repository` | 工作区不是 Git 仓库 |
+| `no-commit` | 仓库还没有任何提交 |
+| `disabled` | `enabled: false`，或仓库根存在 `.dsh-codex-worktree-off` |
+| `root-unreachable` | 配置的 `root` 不可写，或会话沙箱不允许该路径 |
+| `limit-reached` | 该仓库已达 `maxPerRepo`（先清理旧检出） |
+| 其它 message | git 报错 / 超时等，原文显示 |
 
-`mode: branch` 可切回「先建分支」：创建时直接 `git worktree add -b <branchPrefix><名字>`（默认 `wt/<名字>`）。
+### 2.3 会话归属与目录
 
-三个入口：
+- 会话**始终属于原来的 Workspace**；唯一副作用是对当前会话执行 `workingDirectory.set`。
+- 插件不调用 `workspaces.create` / `workspaces.rename` / `sessions.create`，也不新增 Workspace；验收：操作前后 `workspace.json` 的 workspaces 数量不变。
+- 默认 `mode: detached`：插件**不创建分支**，检出始终是 detached HEAD；提交/推送时由 Git 决定分支名（需要具名分支就 `git switch -c`）。`mode: branch` 可改成创建时直接建 `<branchPrefix><名字>` 分支。
 
-| 入口 | 做什么 |
-| --- | --- |
-| 自动（默认） | 在 Git 仓库里开新会话 → 自动建 detached 检出并把会话 cwd 切进去（第 1 节流程）。 |
-| 新会话输入框的 **新建 Worktree** 按钮 | 在空白会话的输入框上方（slot `conversation.input.dock`，仅当会话空白且 Workspace 本身不是 worktree 时显示）：为当前 Workspace 建一个 detached 检出，并在其中打开新会话；用于「我想马上开工，不想先开一个普通会话」。 |
-| 会话头部 chip + 设置页 | 查看当前会话的检出状态、按仓库分组的检出列表、已知对话，并做删除/清理/在此工作树中新建聊天（第 7 节）。 |
+### 2.4 侧边栏标记（只读）
 
-## 2. 工作方式
+- 槽位：`sidebar.session.row.leading`（官方 ambient-marker 座位：会话行首的常驻图标区；组件读取 `sessionId`）。选这个座位是**有意的设计决定**：行尾 action 区是 hover 才出现的按钮条，不适合常驻标记；该座位不属于 shipped workspace picker，不会 shadow 任何官方 UI。
+- 托管会话显示一个 14px 的工作树图标（`⑂` 风格 SVG，`currentColor` 弱化色），tooltip 为 `Codex 风格 Worktree · <检出路径>`。
+- **不可点击**：点击穿透到整行（保持「打开会话」行为）；不注册悬停卡，不提供跳转。
+- 数据来源：宿主注册会话投影 `codexWorktree`；客户端读 `sessions.list.getSnapshot().byId[sessionId].projectionValues?.codexWorktree`，只在 `phase === 'ready'` 时渲染图标，`null`/缺失时隐藏。**零 RPC、零轮询**。
+- 创建/清理/剪枝引起的变化由投影推送即时反映。
 
-触发点是 `agent/created`。创建过程失败**不会**影响会话：插件只记一条警告，会话留在原目录继续跑（降级）。
+> 已知限制：从设置页清理一个**非 live 会话**的检出时，宿主无法向该会话 append 投影事件，因此它的侧边栏标记不会立刻消失，而是等该会话下次 `agent/created` 一致性修复时消失。
 
-会创建：
+### 2.5 会话头 chip
 
-- 新会话的 cwd 在一个 Git 仓库里（`git rev-parse --show-toplevel` 可解析）；
-- 仓库至少有一个提交；
-- cwd 不是池目录内部，也不是另一个 linked worktree；
-- 该仓库当前由本插件管理的 worktree 数量 < `maxPerRepo`（默认 32）。
+- 显示 `Codex 风格 Worktree` + 状态（托管 / 未托管 / 错误）。
+- 弹层内容：路径、仓库、基准提交（base commit）、模式、改动数（dirty）、清理动作。
+- 基础状态优先取投影值；**打开弹层时**再单次调用 `status` 读取脏文件数等细节（按需，不是轮询）。
+- 不提供命名，也不提供「不使用工作树」回滚。
 
-不会创建（跳过原因）：
+### 2.6 设置页
 
-| 情况 | 原因码 |
-| --- | --- |
-| `enabled: false` | `disabled` |
-| agent 来源是 `clear` / `compaction` | `source` |
-| 子代理 / 非顶层 agent，且 `skipChildAgents: true` | `child-agent` |
-| 会话 id 命中 `skipSessionIdPatterns`（默认 `^session-taskboard-`） | `session-pattern` |
-| 会话 preset 命中 `skipPresets` | `preset` |
-| 侧车里已有该会话记录（resume 回到旧会话） | `recorded` |
-| cwd 已经不等于会话原始项目目录（已切走过） | `already-moved` |
-| 仓库根或 cwd 存在 `disableMarker`（默认 `.dsh-codex-worktree-off`） | `marker` |
-| 不是 Git 仓库 | `not-git` |
-| cwd 在池目录内部 | `pool-context` |
-| `root` 落在会话工作区之外，而会话不是 `danger-full-access` | `root-outside-sandbox` |
-| 会话沙箱是 `read-only`，却配了非空 `root` | `read-only-sandbox` |
-| cwd 本身就是 linked worktree（避免套娃） | `linked-worktree` |
-| 仓库还没有任何提交 | `no-commit` |
-| 该仓库已达 `maxPerRepo` | `limit` |
-| 名字连续冲突 | `name-collision` |
-| git 报错 / 超时 | `error` |
+设置里一节 `Codex 风格 Worktree`，分两块：
 
-其他行为：
+1. **配置（可编辑表单）**
+   - 保存 → 走宿主 **settings 服务**写入**活动 profile** 的 `cordis.patch.yml`，并**立即热生效**（volatile 配置：不重启、不重挂插件）；
+   - DSH 官方「插件」设置页也会通过 `configure({ auto: true })` 自动生成同源表单，两处共享同一 revision，冲突有提示；
+   - 「恢复默认」把 20 个用户可见字段写回 schema 默认值；
+   - 冲突（修订号过期）→ 提示「配置已在别处修改」并自动刷新表单；
+   - 非法值 → 返回错误、保留原值并给出约束提示；
+   - settings 服务不可用（headless / 非 profile 组合）→ 降级为只读并保留原提示。
+2. **工作树管理**（沿用原 UI）：按仓库分组的检出列表（路径 / 模式 / dirty / 创建时间）、刷新、逐条清理、立即清理（prune）等（沿用原 UI）。
 
-- **根目录与沙箱**：`root` 为空（默认）时池就是仓库内的 `directory`，落在会话工作区内；`root` 非空时检出建在该绝对根下。DSH 的 `workspace-write` 文件沙箱边界是会话的 `header.cwd`，所以外部 root 只在 `danger-full-access` 会话里才创建，否则跳过并记录 `root-outside-sandbox`（`read-only` 会话配非空 root 也会跳过，原因 `read-only-sandbox`；详见第 5 节）。
-- **创建前 fetch**：`fetchBeforeCreate: true` 时，创建检出前先在该仓库跑 `git fetch --prune --quiet origin`（更新远端跟踪引用并清理已删除的远端分支）。仓库没有 `origin` remote 时跳过并 warn；fetch 失败只记一条 warning，不阻断创建；命令受 `gitTimeoutMs` 约束。默认 `false` = 不联网。
-- **按上限自动清理（后台）**：`autoPrune: true`（默认）时，每次成功创建后插件在后台（延迟约 50ms，不阻塞会话）清理该仓库超出 `autoPruneKeep`（默认 15）条的最旧检出。清理受 `pruneGraceMs`（默认 60000ms）保护——比这更年轻的检出不动；**有未提交改动（或改动状态未知）的检出从不自动删除**；被删的 detached 提交会先建 `refs/dsh-codex-worktree/<名字>` 快照，方便恢复。`maxPerRepo` 仍是硬上限：达到后新会话按 `limit` 跳过，等后台清理（或设置页「立即清理」）腾出空间后才会恢复；`autoPrune: false` 时只跳过、从不自动清理。
-- **池目录自忽略**：`poolGitignore: true` 时，插件首次创建池目录会写入内容为 `*` 的 `.gitignore`，避免 worktree 内容出现在主检出的 `git status` 里。
-- **git 超时**：每条 git 命令受 `gitTimeoutMs`（默认 20000ms）硬超时约束，超时按失败降级处理，不会挂住会话。
-- **默认不联网**：`baseRef` 只做本地解析（`<baseRef>^{commit}`）；只有显式开启 `fetchBeforeCreate` 才会有 fetch。
-- **创建提示**：`noticeOnCreate: true` 时会额外排一条用户上下文消息描述新检出（cwd 上下文本身已经能说明位置，默认关闭）。
-- **不自动删除会话检出**：`cleanupOnDispose` 仍是预留字段（默认 `false`）；会话结束后检出保留，由你、`/wt-clean`、设置页删除按钮或 `autoPrune` 回收。
+## 3. 安装与升级
 
-## 3. 安装
+### 3.1 安装
 
-前置：
-
-- 已安装 DSH（兼容 `0.2.0-rc.2` / `0.2.1-rc.2`）；
-- `git` 在 PATH 里；
-- **先结束正在运行的任务/会话**——安装后会重启 DSH，运行中的会话不会带着旧 cwd 状态迁移。
-
-推荐用 DSH 自带的插件命令从 GitHub 安装（`--profile` 不写时默认 desktop）：
+前置：DSH `0.2.0-rc.2` / `0.2.1-rc.2`、Node.js `>= 22.19.0`、`git`；先结束正在运行的任务/会话。
 
 ```sh
 dsh plugin --profile desktop add github:wplct/dsh-codex-worktree
 ```
 
-装完后**完全退出并重开 DSH**（桌面应用重启，不是刷新页面），新的插件行才会生效。
+然后**完全退出并重开 DSH 一次**（bundle 层生效；不是刷新页面）。此后**修改配置不需要重启**（volatile 热生效）。
 
-### 直接安装（可选的本地/离线方式）
+### 3.2 从 0.2.x 升级到 0.3.0
 
-本仓库也带了一个不经过包管理器的直接安装脚本，适合本地开发或离线场景：
+- 升级后**旧「新建 Worktree」按钮消失**，创建只发生在发送第一条消息之后；`create` / `cancel` 端点与 pending/adoption 逻辑已移除；
+- 侧车 `state.json` 从 v1 **自动迁移**到 v2（保留 `records`，补空 `placements`，版本号升为 2）；v1 的旧记录继续在 chip / 设置页显示；
+- **一次性人工清理**（确认后执行）：0.2.x 旧按钮创建过的工作区（若侧边栏里有多出来的 workspace）、它们对应目录下的 `.agents/worktrees/wt-*` 检出、以及残留的 pending 记录；
+- profile 侧确认包依赖 / bundles / `cordis.patch.yml` 没有旧的 `auto-worktree` 残行（0.2.2 已清理）；市场的 disabled 列表不含旧包名；
+- 建议升级后重启一次 DSH，确保新 bundle 与客户端产物都刷新。
+
+### 3.3 直接安装（可选的本地/离线方式）
+
+本仓库还带一个不经过包管理器的直接安装脚本，适合本地开发或离线：
 
 ```sh
 node install.mjs --dry-run   # 只打印计划，不写任何文件
@@ -110,15 +155,11 @@ DSH_HOME=/path/to/.dsh node install.mjs --profile desktop
 
 1. 校验源包（`package.json`、`cordis.patch.yml`、`lib/**`、`client/**` 必须齐；缺一半直接报错退出，错误信息带绝对路径）；
 2. 复制 `package.json`、`cordis.patch.yml`、`README*.md`、`lib/**`、`client/**`（递归）到 `<profile>/node_modules/dsh-codex-worktree/`——先写进同盘的临时暂存目录，不直接覆盖线上目录；
-3. 对暂存副本里**每一个** `.js` 跑 `node --check`，全部通过才发布；失败则回滚，profile 里不会留下半成品；
-4. 把 `<profile>/cordis.patch.yml` 备份为 `.bak-<ISO时间戳>`，再在文件末尾追加带标记的 patch 块（内容 = 包内 `cordis.patch.yml` 去掉 `#` 注释行后的正文；当前该文件只有一行不含 config 的 `insert`，默认值来自 `lib/config.js`）。文件里已存在 `# >>> dsh-codex-worktree >>>` 标记时跳过追加；
-5. 打印目标路径、复制的文件数、备份路径、下一步。
+3. 对暂存副本里**每一个** `.js` 跑 `node --check`，全部通过才发布；失败则回滚；
+4. 把 `<profile>/cordis.patch.yml` 备份为 `.bak-<ISO时间戳>`，再在文件末尾追加带标记的 patch 块（内容 = 包内 `cordis.patch.yml` 去注释后的正文；当前该文件只有一行不含 config 的 `insert`，默认值来自 `lib/config.js`）。已存在 `# >>> dsh-codex-worktree >>>` 标记时跳过追加；
+5. 打印目标路径、文件数、备份路径与下一步。
 
-直接安装脚本明确**不会**：
-
-- 修改 profile 的 `package.json`；
-- 调用 `pnpm` / `npm` / 安装任何依赖；
-- 重启或热加载 DSH（需要你手动重启）。
+直接安装脚本明确**不会**：修改 profile 的 `package.json`、调用 `pnpm`/`npm`、重启 DSH。
 
 ## 4. 卸载与回滚
 
@@ -128,7 +169,7 @@ DSH_HOME=/path/to/.dsh node install.mjs --profile desktop
 dsh plugin --profile desktop remove dsh-codex-worktree
 ```
 
-如果是用第 3 节的**直接安装**脚本装的，则用包内的 `uninstall.mjs`：
+如果是用第 3.3 节的**直接安装**脚本装的，则用 `uninstall.mjs`：
 
 ```sh
 node uninstall.mjs --dry-run   # 只打印计划
@@ -136,198 +177,212 @@ node uninstall.mjs             # 默认 profile
 node uninstall.mjs --profile web
 ```
 
-`uninstall.mjs` 做的事：
-
-1. 删除 `<profile>/cordis.patch.yml` 里的 `# >>> dsh-codex-worktree >>>` … `# <<< dsh-codex-worktree <<<` 标记块（含块内内容），**其余行原样保留**（不碰其他插件的配置）；改写前备份为 `.bak-<ISO时间戳>`；
-2. 递归删除 `<profile>/node_modules/dsh-codex-worktree/`；
-3. 打印每一步动作和备份路径；`--dry-run` 不写文件。
-
-它是幂等的：重复执行只会报告「没有标记 / 未安装」。它也会提示（但不会删除）两类残留：安装时留下的 `.dsh-codex-worktree.previous-<时间戳>` 快照目录，以及 `$DSH_HOME/dsh-codex-worktree/` 侧车记录（里面是已创建 worktree 的台账，确认 worktree 都清掉了再手动删）。
-
-回滚的三种方式：
+`uninstall.mjs`：删除 `<profile>/cordis.patch.yml` 里的标记块（含块内内容，其余行原样保留，改写前备份 `.bak-<ISO时间戳>`）、递归删除 `<profile>/node_modules/dsh-codex-worktree/`、打印每步动作与备份路径；幂等，`--dry-run` 不写文件。它也会提示（不删除）安装快照 `.dsh-codex-worktree.previous-*` 与侧车台账。
 
 | 目的 | 操作 |
 | --- | --- |
 | 完整卸载 | `dsh plugin --profile desktop remove dsh-codex-worktree`（直接安装则 `node uninstall.mjs`），然后重启 DSH |
 | 只回滚 profile patch | `cp <profile>/cordis.patch.yml.bak-<时间戳> <profile>/cordis.patch.yml`，再手动删 `node_modules/dsh-codex-worktree/`，重启 |
-| 回滚到上一版插件 | 安装时打印的 `.dsh-codex-worktree.previous-<时间戳>` 目录改名回 `node_modules/dsh-codex-worktree`，重启 |
+| 回滚到上一版插件 | 把安装时打印的 `.dsh-codex-worktree.previous-<时间戳>` 改名回 `node_modules/dsh-codex-worktree`，重启 |
 
-卸载不会删除你的 worktree 和分支：先 `/wt-status` 看清单、`/wt-clean` 清理，或手动 `git worktree remove <path>` / `git branch -d <branch>`。
+卸载不会删除你的 worktree 和分支：先 `/wt-status` 看清单、`/wt-clean` 清理，或手动 `git worktree remove <path>` / `git branch -d <branch>`。删除侧车台账（`$DSH_HOME/dsh-codex-worktree/`）会同时清空 placement 记忆。
 
 ## 5. 配置
 
-配置默认值定义在 [`lib/config.js`](./lib/config.js)（`lib/index.js` 的 schemastery schema 与之一致）。包内 [`cordis.patch.yml`](./cordis.patch.yml) 只注册一行**不带 config** 的 `insert`（`id: codex-worktree`、`name: dsh-codex-worktree`），便于 dshmarket 热挂载；直接安装脚本把这一行（去注释后）追加进 profile patch。要改行为就在 profile patch 里加 `- id: codex-worktree` 覆盖行（见下文）。
+### 5.1 配置从哪来
 
-包内 `cordis.patch.yml`（默认值不在这里，而在 `lib/config.js`）：
+- 默认值与校验：`lib/config.js`（`resolveConfig` 是唯一事实来源；`EDITABLE_FIELDS` 决定设置表单的字段与顺序）；
+- 包内 `cordis.patch.yml`：**纯 insert 行**（`id: codex-worktree`、`name: dsh-codex-worktree`），不带 config，便于市场热挂载；
+- 运行时覆盖：活动 profile 的 `cordis.patch.yml` 里 `- id: codex-worktree` 的 config 行（设置页保存会自动维护它）；
+- 用户可见字段全部 **volatile**：保存后立即生效，无需重启或重挂插件。
 
-```yaml
-- insert:
-    - id: codex-worktree
-      name: dsh-codex-worktree
-```
+### 5.2 用户可见字段（设置表单可编辑，20 个）
 
-| 字段 | 默认值 | 说明 |
+| 字段 | 类型 | 默认 | 控件 | 约束 / 说明 |
+| --- | --- | --- | --- | --- |
+| `enabled` | boolean | `true` | 开关 | 总开关；关掉后新会话不建树（已有检出不受影响） |
+| `defaultPlacement` | `worktree`\|`local` | `worktree` | 下拉 | 工作区还没有 placement 记录时的默认位置 |
+| `directory` | string | `.agents/worktrees` | 文本框 | 池目录：相对路径、无 `.`/`..` 段 |
+| `root` | string | `""` | 文本框 | 空 = 仓库内；也可填绝对路径或仓库相对路径，无 `..` |
+| `mode` | `detached`\|`branch` | `detached` | 下拉 | `detached` 不建分支（默认）；`branch` 创建时建 `<branchPrefix><名字>` |
+| `namePrefix` | string | `wt-` | 文本框 | 检出名前缀；不含 `/` `\`，不以 `-` 开头 |
+| `branchPrefix` | string | `wt/` | 文本框 | `mode: branch` 的分支前缀；不以 `-` `/` 开头 |
+| `baseRef` | string | `HEAD` | 文本框 | 本地基准引用；不以 `-` 开头；只本地解析（是否联网看 `fetchBeforeCreate`） |
+| `fetchBeforeCreate` | boolean | `false` | 开关 | 创建前 `git fetch --prune origin`；失败只告警、不阻断；无 `origin` 时跳过 |
+| `autoPrune` | boolean | `true` | 开关 | 每次成功创建后在后台清理该仓库最旧检出（保留最新 `autoPruneKeep` 条） |
+| `autoPruneKeep` | number | `15` | 数字 | 每个仓库保留的最新检出数；非负整数 |
+| `pruneGraceMs` | number | `60000` | 数字 | 比这更「年轻」的检出永不自动清理（毫秒）；非负整数 |
+| `poolGitignore` | boolean | `true` | 开关 | 首次建池时写内容为 `*` 的 `.gitignore`，保持主检出 `git status` 干净 |
+| `gitTimeoutMs` | number | `20000` | 数字 | 单条 git 命令硬超时（毫秒）；正整数 |
+| `skipChildAgents` | boolean | `true` | 开关 | 子代理 / 子会话不建树 |
+| `skipSessionIdPatterns` | string[] | `["^session-taskboard-"]` | 多行文本 | 每行一个正则，命中不建（默认跳过 taskboard 会话） |
+| `skipPresets` | string[] | `[]` | 多行文本 | 每行一个正则，agent preset 命中不建 |
+| `disableMarker` | string | `.dsh-codex-worktree-off` | 文本框 | 仓库根或会话 cwd 存在同名文件时不建树；纯文件名，无 `/` `\` |
+| `maxPerRepo` | number | `32` | 数字 | 单仓库插件托管检出上限；正整数；达到后本次创建报 `limit-reached` |
+| `noticeOnCreate` | boolean | `false` | 开关 | 建树后额外排一条用户上下文消息描述新检出 |
+
+隐藏内部字段（不在表单里）：
+
+| 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 插件总开关。`false` 时行为与未安装一致（完全不碰 git）。 |
-| `root` | `''` | worktree 根目录。空字符串（默认）= 用仓库内的 `directory`；非空必须是绝对路径，检出改到该根下（见下方安全边界）。 |
-| `directory` | `.agents/worktrees` | worktree 池目录（`root` 为空时相对仓库根），不能是绝对路径、不能含 `.`/`..` 段。放在仓库内部才能落在 DSH 工作区文件沙箱内。 |
-| `fetchBeforeCreate` | `false` | 创建前在该仓库执行 `git fetch --prune --quiet origin`（更新远端跟踪引用并清理已删除的远端分支）。仓库没有 `origin` remote 时跳过并 warn；失败只记 warning，不阻断创建；受 `gitTimeoutMs` 约束。默认关闭 = 不联网。 |
-| `autoPrune` | `true` | 每次成功创建后在后台（不阻塞会话）清理该仓库超出 `autoPruneKeep` 的最旧本插件检出，保留最新 `autoPruneKeep` 条。受 `pruneGraceMs` 保护；**有未提交改动（或改动状态未知）的检出永不自动删除**。`maxPerRepo` 仍是硬上限，达到后新会话按 `limit` 跳过。 |
-| `autoPruneKeep` | `15` | 自动清理后每个仓库保留的最新检出数量（非负整数）。默认 15 < `maxPerRepo` 32，所以第一次超限会一次性腾出空间。 |
-| `pruneGraceMs` | `60000` | 自动清理的冷却时间（非负整数，毫秒）：比这个更「年轻」（按创建时间）的检出永不自动清理，避免刚建好就被回收。 |
-| `mode` | `detached` | `detached`：detached HEAD，插件不建分支；`branch`：创建时直接建 `<branchPrefix><名字>` 分支。 |
-| `namePrefix` | `wt-` | 自动生成的检出目录名前缀（不能含 `/`、`\`，不能以 `-` 开头）。 |
-| `branchPrefix` | `wt/` | `mode: branch` 时的分支名前缀（不能以 `-` 或 `/` 开头）。 |
-| `baseRef` | `HEAD` | 新建检出的本地起点（只做本地解析，是否联网取决于 `fetchBeforeCreate`）。 |
-| `poolGitignore` | `true` | 首次创建池目录时写入内容为 `*` 的 `.gitignore`，保持主检出 `git status` 干净。 |
-| `gitTimeoutMs` | `20000` | 单条 git 命令硬超时（正整数，毫秒）；超时按失败降级。 |
-| `skipChildAgents` | `true` | 子代理/子会话不建树，避免一个任务炸出多个检出。 |
-| `skipSessionIdPatterns` | `["^session-taskboard-"]` | 会话 id 正则列表，命中即跳过（默认跳过 taskboard 会话，它有自己的 worktree 隔离机制）。 |
-| `skipPresets` | `[]` | 额外跳过的 agent preset id 正则列表。 |
-| `disableMarker` | `.dsh-codex-worktree-off` | 仓库根或会话 cwd 里存在同名文件时，该仓库/该会话不建树（临时快速关闭用）。 |
-| `maxPerRepo` | `32` | 本插件在单个仓库里同时管理的检出数量上限；达到后按 `autoPrune` 处理（`/wt-clean`、设置页删除按钮也可回收）。 |
-| `cleanupOnDispose` | `false` | **仍是预留字段**：会话结束/销毁时是否自动删除检出。默认关闭，检出保留（与 Codex 一致）。 |
-| `noticeOnCreate` | `false` | 建树后是否额外排一条用户上下文消息描述新检出（cwd 上下文通常已足够）。 |
+| `gitCommand` | `git` | 内部字段：git 可执行文件名/路径 |
+| `cleanupOnDispose` | `false` | 预留字段：会话销毁时是否自动删除检出（当前恒为保留） |
 
-### `root` 的语义与安全边界
+### 5.3 `root` 的语义与安全边界
 
-DSH 的 `workspace-write` 文件沙箱边界是**会话的 `header.cwd`（会话工作区根）**，不是整个磁盘。
+DSH 的 `workspace-write` 文件沙箱边界是**会话的原始工作区目录（`header.cwd`）**，不是整个磁盘。
 
-- `root: ''`（默认）：池 = `<仓库>/<directory>`，检出永远在仓库内，也就是在会话工作区内 → `workspace-write` 可正常读写，最安全，推荐。
-- `root: /some/absolute/path`：检出建在该绝对根下。若它**落在会话工作区之外**，`workspace-write` 会话里的写入会被沙箱拒绝，插件因此**跳过创建**并记录原因 `root-outside-sandbox`（与其建一个写不进去的检出，不如留在原目录）；只有 `danger-full-access` 会话才会在外部根创建检出。
-- 自动清理/删除同样走沙箱约束：外部 root 的清理需要会话具备相应权限，否则会报错而不是强删。
+- `root: ""`（默认）：池 = `<仓库>/<directory>`，检出始终在仓库内（即会话工作区内）→ `workspace-write` 可正常读写，最安全；
+- `root` 非空：检出建在该根下（绝对路径，或仓库相对路径）。若它**落在会话工作区之外**，`workspace-write` 会话里写入会被沙箱拒绝，创建会失败并在进度卡显示 `root-unreachable`，会话留在原目录继续；只有 `danger-full-access` 会话才能在外部根创建工作树；
+- 自动清理 / 删除同样受沙箱约束：外部 root 的清理需要会话具备相应权限，否则报错而不是强删。
 
-改配置的两种方式：
+## 6. 工作树管理
 
-1. **改 profile patch（推荐，不改包）**：在 `<profile>/cordis.patch.yml` 里另加一条 id 覆盖行，profile patch 在所有 bundle 层之后应用，优先级更高：
-
-   ```yaml
-   - id: codex-worktree
-     config:
-       mode: branch
-       namePrefix: 'dev-'
-   ```
-
-   注意 `- id:` 的 `config` 是**整块替换**，不是逐字段合并：覆盖行里没写的字段会回落到 schema 默认值（即本节表中的默认值），所以想保留的自定义项必须在覆盖行里重述一遍。
-
-2. **改 `lib/config.js` 的默认值（开发/发行默认值）**：适合把默认值改成就地生效的发行默认值；改完重新安装（`dsh plugin` 或 `node install.mjs`）并重启 DSH。注意 `cordis.patch.yml` 里没有 config，改它不会改变默认值。
-
-## 6. 用法
-
-### 自动路径（默认）
-
-在 Git 仓库里开新会话 → 什么都不用做，会话已经在 `.agents/worktrees/wt-YYMMDD-HHMMSS` 里干活。第一句话之前就已经切好 cwd。
-
-### 新建 Worktree 按钮
-
-新会话输入框（composer）上方的 **新建 Worktree** 按钮：对当前空白会话的 Workspace 立即建一个 detached 检出，并直接在新会话里打开它（会话 cwd = 新检出）。这是 RPC `create` 的 GUI 入口（第 7 节），仅在会话空白且 Workspace 本身不是 worktree 时显示，用于「想马上开工、不想先开普通会话等自动建树」的场景。失败会直接在按钮旁提示原因（非 Git 仓库、仓库无提交、插件关闭、达到 `maxPerRepo`、`root` 不可写等）。
-
-### 斜杠命令
+- **设置页「工作树管理」**：按仓库分组列出所有托管检出（路径 / 模式 / dirty / 创建时间）、刷新、逐条清理（脏检出需确认/强制）、「立即清理」（对所有仓库 prune，显示 removed / snapshots）；
+- **斜杠命令**（管理专用，命名交给 Git）：
 
 | 命令 | 作用 |
 | --- | --- |
-| `/wt-status` | 显示本会话的自动检出：`path`、`repo`、`branch`（detached 时显示 `detached`）、`base`（base commit）、`dirty`（改动数）。 |
-| `/wt-clean [--force] [--branch]` | 删除本会话的自动检出。有未提交改动时默认拒绝，`--force` 强制删除；`--branch` 同时删除对应分支（只在 `mode: branch` 时有意义）。 |
+| `/wt-status` | 显示本会话的检出：path、repo、branch（detached 时显示 detached）、base、dirty |
+| `/wt-clean [--force] [--branch]` | 删除本会话的检出；有未提交改动时默认拒绝，`--force` 强制删除；`--branch` 同时删除分支（`mode: branch` 时有意义） |
 
-典型流程（命名完全交给 Git）：
+- **自动清理**：`autoPrune: true` 时每次成功创建后后台清理该仓库超出 `autoPruneKeep` 的最旧检出；脏检出与比 `pruneGraceMs` 更年轻的检出不动；被删的 detached 提交先建 `refs/dsh-codex-worktree/<名字>` 快照，可用 `git branch <name> dsh-codex-worktree/<name>` 恢复（未提交改动无法恢复）。
+- 手动 prune 返回被清理条目与快照列表（见 §7 `prune`）。
 
-```text
-新会话（自动 wt-251019-190932，detached）
-  … 改文件、跑测试 …
-  git switch -c fix/cart-order   # 想建分支时用普通 git 命令
-  git commit / git push          # 正常提交
-/wt-clean --branch               # 需要时回收检出与分支
+## 7. RPC 与状态同步
+
+### 7.1 RPC 端点
+
+浏览器通过带鉴权的 `/api` 载体调用：`connection.rpc.call('/api', 'dsh-codex-worktree/<endpoint>', payload, signal)`；宿主注册 `/api/dsh-codex-worktree/<endpoint>` 并断言 `message.method === 'dsh-codex-worktree/<endpoint>'`；响应为 `{ok:true,value}` 或 `{ok:false,error:{code,message,details}}`。
+
+| 端点 | 请求 | 响应 value | 错误码 |
+| --- | --- | --- | --- |
+| `status` | `{ sessionId }` | `{ managed, path?, workspaceRoot?, repoRoot?, mode?, branch?, baseCommit?, createdAt?, dirty? }` | `bad-request` |
+| `list` | `{ workspacePath? }` | `{ repos: [{ repoRoot, records: [...] }], config }`（设置页管理列表用） | `bad-request` |
+| `clean` | `{ sessionId, force?, deleteBranch? }` | `{ removed, path, branchDeleted }` | `worktree-dirty`、`not-managed` |
+| `prune` | `{ repoRoot? }` | `{ removed, snapshots }` | `bad-request` |
+| `placement` | 读 `{ workspacePath }`；写 `{ workspacePath, mode }` | `{ workspacePath, mode, defaultMode, isGit }` | `bad-request`、`not-git-repository` |
+| `settings` | `{action:'get'}` / `{action:'set', patch, revision}` / `{action:'reset'}` | `{ ns, revision, writable, values, defaults, fields: [...] }` | `settings-unavailable`、`conflict`、`invalid-config` |
+
+- **没有 `create`、没有 `cancel`**：创建只由 `agent/created` 触发；进度卡「取消」只是客户端隐藏卡片。
+- 投影数据不走 RPC；`status` 仅供 chip 弹层与设置页按需读取。
+
+### 7.2 会话投影（零轮询）
+
+- 宿主注册投影单元 `codexWorktree`（`stateVersion: 1`），每次变化 append 事件 `codex-worktree/state`，`data.state` 携带**完整后置状态**；
+- 状态：`{ phase: 'creating'|'ready'|'error', step?: 'prepare'|'checkout'|'finalize', path?: string|null, repoRoot, workspaceRoot, placement?: 'worktree'|'local', mode, branch?: string|null, baseCommit?: string|null, error?, updatedAt }` 或 `null`；
+- 客户端订阅 `sessions.list` 快照的 `byId[sessionId].projectionValues.codexWorktree`（`useSyncExternalStore`），用于进度卡、侧边栏标记、chip 基础状态；
+- 全程**无 `setInterval` / 无轮询**；
+- 投影事件会进入会话日志（每个新会话约 4 条小事件）——这是 DSH 原生状态同步方式，换来零轮询；
+- 清理：live 会话 → 宿主 append `null`，标记立即消失；非 live 会话 → 下次 `agent/created` 一致性修复时补 `null`（见 §2.4 已知限制）。
+
+### 7.3 侧车数据（`$DSH_HOME/dsh-codex-worktree/state.json`）v2
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "records": {
+    "session-…": {
+      "sessionId": "session-…",
+      "repoRoot": "/abs/repo",
+      "workspaceRoot": "/abs/repo",
+      "path": "/abs/repo/.agents/worktrees/wt-…",
+      "poolRoot": "/abs/repo/.agents/worktrees",
+      "repoLabel": "repo-<hash8>",
+      "mode": "detached",
+      "branch": null,
+      "baseCommit": "<sha>",
+      "source": "startup",
+      "createdAt": "ISO"
+    }
+  },
+  "placements": {
+    "/abs/repo": { "mode": "worktree", "updatedAt": "ISO" }
+  }
+}
 ```
 
-## 7. GUI 设置页与 RPC 接口
+- v1 → v2 迁移：保留 `records`，补空 `placements`，版本号升级；
+- 写入原子 tmp+rename；损坏文件改名备份后按空状态继续；
+- 过期 placement 惰性清理：路径不存在时忽略，超过 90 天未用会清理。
 
-### 设置页（Codex 风格）
+## 8. 兼容性、限制与风险
 
-会话头部还有一个 **chip**：显示当前会话的检出状态（已托管 / 未托管、dirty 数量），点开可看路径、仓库、mode、base commit、改动数和创建时间，并就地清理。设置页则提供全局视图：
+- **DSH 版本**：`0.2.0-rc.2` / `0.2.1-rc.2`；依赖 base bundle 的 `sessionProjections`、`settings`、`configEditor`——缺失时自动降级：无投影 → 侧边栏标记 / 进度卡不可用；无 settings → 配置只读；
+- **Node.js ≥ 22.19.0**（客户端用 React 18+ 的 `useSyncExternalStore`）；
+- **创建只发生在 `agent/created`**，只对 `source === 'startup'` 的顶层新会话生效；resume / clear / compaction / 子代理 / taskboard 会话 / preset 命中 / 禁用标记 / `enabled: false` / 已有记录 / placement=local 一律不建；
+- **不新建 Workspace**：会话仍挂原工作区，只切 cwd；
+- **不命名、不建分支**（默认 detached）；`mode: branch` 可选；插件不合并、不推送、不删用户分支；
+- **非 Git 工作区**：选择器隐藏，不建树；
+- **只读沙箱 / `workspace-write` 越界 / 无提交 / 达到上限**：结构化错误，不阻塞会话；
+- 单仓库并发创建由 `createKeyedMutex` 串行化；`agent/created` 内任何异常都会被吞掉并 warn，绝不阻止会话启动；
+- 投影事件进入会话日志（约 4 条/新会话），这是零轮询的代价；如在意日志体积，后续可改 ephemeral 通道（不在本期）；
+- **已知限制**：从设置页清理非 live 会话的检出时，侧边栏标记不会立刻消失，需等该会话下次 `agent/created` 一致性修复（见 §2.4）；
+- **座位选择（不是限制，是设计）**：位置选择器注册在官方 `conversation.hero.options` list 座位，**不是** shipped WorkspacePicker 占用的单值座位 `conversation.hero.workspace`（那个座位 `kind: "single"`、`replaceRisk: "shadows-shipped-ui"`），所以**永不 shadow** 官方工作区切换器；侧边栏标记用官方 ambient-marker 座位 `sidebar.session.row.leading`，不是 hover-only 的行尾 action 条；
+- 侧边栏标记只是标记：不可点击、无悬停卡、无跳转；
+- 「不使用工作树」回滚功能**明确不做**；进度卡「取消」只隐藏卡片。
 
-插件在 Web GUI 的设置里注册一节 **Codex 风格 Worktree**（`settings.section`）：
+不在范围：云端 / 关联 Codex Web / 多工作位置；自动合并、PR、环境安装；按会话（而非按工作区）记忆 placement；已有会话中途切换到工作树。
 
-- **配置（只读）**：展示 `root`（空值时显示「仓库内：`<directory>`」）、`fetchBeforeCreate`、`autoPrune`（连同「保留 N 个」= `autoPruneKeep`）的当前生效值；要改值走第 5 节的 profile patch，设置页不写配置（`pruneGraceMs` 不在页面上展示，改它同样走 profile patch）。
-- **立即清理（Prune now）**：按 `autoPrune` 同样的规则（含 `pruneGraceMs` 冷却与脏检出跳过）对所有已知仓库立即执行一次 prune，并显示本次「已清理 N 个工作树、M 个快照」的结果。
-- **按仓库分组的 worktree 列表**：每个仓库一段（可展开/折叠），逐行显示 **路径 / mode / dirty / 创建时间**；行内操作：
-  - **在此工作树中新建聊天**：在对应检出目录上注册/复用 Workspace 并新开一个会话（人不用再手选目录）；
-  - **打开对话**：跳到占用该检出的既有会话；
-  - **删除**：清理该检出（有未提交改动时需要确认或强制删除）。
-- **已知对话**：每条 worktree 下列出占用它的会话，方便判断哪些检出还在用、哪些可以回收。
+## 9. 验收标准（AC）
 
-### RPC 端点
-
-客户端半边通过这些带鉴权的 `/api` 路由调用（`POST ${API_PREFIX}/<endpoint>`，JSON 请求体）：
-
-| 端点 | 请求 | 响应 |
+| 编号 | 验收项 | 验证方式 |
 | --- | --- | --- |
-| `status` | `{ sessionId }` | 该会话的检出状态（path / repo / branch / base / dirty） |
-| `clean` | `{ sessionId, force?, deleteBranch? }` | 清理结果 |
-| `list` | `{ workspacePath? }` | `{ repos: [...], config: { ... } }`——按仓库分组的检出列表 + 设置页要展示的只读配置快照（`root`、`directory`、`mode`、`fetchBeforeCreate`、`autoPrune`、`autoPruneKeep`） |
-| `prune` | `{ repoRoot? }` | `{ removed, snapshots }`——被清理的条目与新建的 `refs/dsh-codex-worktree/<name>` 快照；不传 `repoRoot` 时对所有已知仓库执行 |
-| `create` | `{ path }`（composer/会话所在仓库路径） | 新建的检出记录（`path`、`repoRoot`、`mode`、`branch`、`baseCommit`、`createdAt` 等，`pending` 状态表示还没有会话占用）——「新建 Worktree」按钮用它 |
-
-## 8. 验证清单（12 条验收标准）
-
-| # | 场景 | 期望 |
-| --- | --- | --- |
-| 1 | 自动建树 | 在 Git 仓库里开新会话，不做任何操作，仓库内出现 `.agents/worktrees/wt-<时间戳>`，且 `git worktree list` 里有它。 |
-| 2 | 零输入 | 全程不需要输入 worktree 名、分支名，也不需要点任何按钮。 |
-| 3 | cwd 上下文 | 会话工作目录已切到新检出：模型看到的 cwd/相对路径解析都在 `.agents/worktrees/wt-…` 下（`/wt-status` 的 `path` 与之一致）。 |
-| 4 | 第二个会话独立 | 同一仓库再开一个会话，得到**另一个** `wt-…` 目录，两个会话互不干扰；池内数量叠加（上限 `maxPerRepo`）。 |
-| 5 | 纯 detached、插件不建分支 | 默认 `mode: detached`：`/wt-status` 显示 `branch: detached`，检出内 `git symbolic-ref -q HEAD` 失败；`git branch` 里没有插件创建的分支。想建分支就用普通 `git switch -c`。 |
-| 6 | 不该建的都不建 | 非 Git 目录、无提交的仓库、`skipChildAgents: true` 下的子代理、session id 匹配 `^session-taskboard-` 的会话、`enabled: false` 的插件——五类场景都不产生新目录（可用 `/wt-status` 确认「not in an automatic worktree」）。 |
-| 7 | 故障注入降级 | 让 git 失败或超时（例如把 `gitTimeoutMs` 调到极小、或 `PATH` 里去掉 git）：会话照常启动，留在原目录，日志出现一条 `automatic worktree … failed` 警告，无未捕获异常。 |
-| 8 | resume 保持 | 恢复（resume）已有会话：因为侧车里已有该会话记录，不会重复建树，cwd 仍指向原来的检出。 |
-| 9 | 卸载干净 | `dsh plugin --profile desktop remove dsh-codex-worktree`（直接安装则 `node uninstall.mjs`）后：profile patch 里标记块消失且其余行完好、`node_modules/dsh-codex-worktree/` 不存在、重启 DSH 不再加载插件、其他插件配置未被改动。 |
-| 10 | `fetchBeforeCreate` 生效且失败不阻断 | 开启后创建前先执行 `git fetch --prune --quiet origin`（可从远端跟踪引用变化或 git 调用日志确认）；把 remote 指到不可达地址或断网后再开新会话：仍然创建成功，只多一条 fetch 失败 warning；没有 `origin` remote 的仓库只 warn 一次并照常创建。 |
-| 11 | `autoPrune` 只清最旧、不删脏、detached 留快照 | 把 `maxPerRepo` 调小（如 2）、`autoPruneKeep: 1`、`pruneGraceMs: 0`，连开多个会话：每次成功创建后后台清理该仓库超出的最旧**干净**检出，脏检出保留；被删的 detached 提交出现在 `git for-each-ref refs/dsh-codex-worktree` 里，可用 `git branch <name> dsh-codex-worktree/<name>` 恢复；清理来不及腾空间时新会话按 `limit` 跳过，点设置页「立即清理」可立即回收。 |
-| 12 | 外部 `root` + `workspace-write` 被跳过并给出原因 | `root` 设为会话工作区之外的绝对路径、会话为 `workspace-write`：新会话不创建检出，原因码为 `root-outside-sandbox`（日志/状态可见）；`read-only` 会话配非空 root 则为 `read-only-sandbox`；切到 `danger-full-access` 后才在外部根创建。 |
-
-## 9. 限制与风险
-
-- **只创建，不合并**：插件从不 commit、merge、push、rebase，也不删你的分支。合并/推送由你（或模型用普通 git 命令）决定。默认 detached 时，未提交改动没有分支保护——误删检出即丢失，所以 `cleanupOnDispose` 默认 `false`、会话结束后检出保留。
-- **detached 误删风险**：`git worktree remove --force`、`rm -rf` 检出目录、或 `git clean -fdx`（会扫到池目录）都可能丢掉未提交的工作。建议短任务尽快提交；不确定就先在检出里 commit（detached 提交仍可由 Git 引用/恢复）。
-- **不是沙箱**：worktree 只是「协作约定 + 独立工作目录」，不是安全边界。同一个 OS 用户、同一文件系统、同一仓库对象库，插件本身也不限制你用绝对路径访问别处。DSH 的文件沙箱策略覆盖的是会话的 `header.cwd`：默认 `root` 为空、池在仓库内，所以 `workspace-write` 可写；把 `root` 指到工作区之外需要 `danger-full-access` 会话，否则插件直接跳过创建（`root-outside-sandbox`）。
-- **池目录在主检出里**：即使有 `poolGitignore`，仓库级操作仍会看到它（IDE 索引、`git status --ignored`、`find`、打包工具）。别对仓库根跑破坏性的 `git clean -fdx`。
-- **与 taskboard 的关系**：`dsh-taskboard` 有自己的一套 per-task worktree 隔离（独立分支、merge 证据）。默认 `skipSessionIdPatterns: ["^session-taskboard-"]` 让两者互不叠加；如果你把该模式删掉，同一次 taskboard 任务可能被建两份检出，需要自己承担冲突与清理成本。
-- **base 会变旧**：`baseRef` 只在创建时解析一次（默认不 fetch；开启 `fetchBeforeCreate` 只更新远端跟踪引用，不会更新或 rebase 已有检出）。主检出切分支/rebase 不会同步到已有 worktree；拿旧 detached 检出提交时注意目标分支。
-- **上限、自动清理与回收**：`maxPerRepo`（默认 32）是硬上限，达到后新会话按 `limit` 跳过；`autoPrune: true`（默认）会在每次成功创建后于后台清理最旧的**干净**检出、保留最新 `autoPruneKeep`（默认 15）条，脏检出和比 `pruneGraceMs`（默认 60000ms）更年轻的检出不动。被清掉的 detached 提交有 `refs/dsh-codex-worktree/<name>` 快照，可用 `git branch <name> dsh-codex-worktree/<name>` 恢复，但**未提交的改动无法恢复**。想完全不自动清理就设 `autoPrune: false`，回收交给 `/wt-clean`、设置页的「立即清理」/「删除」或手动 `git worktree remove`；侧车台账不会被卸载脚本删除。
+| AC-1 | 工作位置选择器出现在「工作区」与「标准模式」之间 | 手工 GUI + smoke-client 渲染断言 |
+| AC-2 | 选择按工作区记住：切「本地」后新会话在原目录运行、无 `.agents/worktrees` 产物；重启后仍为「本地」 | 手工 + live-host RPC + 侧车断言 |
+| AC-3 | 默认 worktree：新工作区首次新会话发送后建树并切换 cwd | 集成测试（fake ctx + 真 git） |
+| AC-4 | 发送后输入框上方出现三步进度卡（投影驱动，零轮询），最少 1s，完成后 chip / 标记出现 | 手工 + smoke-client 状态机断言 |
+| AC-5 | 点「取消」只隐藏卡片、创建继续；未提供「不使用工作树」 | smoke-client + 代码 grep |
+| AC-6 | 操作前后 `workspace.json` 工作区数量不变，会话仍挂原工作区 | live-host 断言 + 手工 |
+| AC-7 | 侧边栏托管会话显示只读图标（不可点、tooltip 带路径）；清理后立即消失（投影推送，无轮询） | 手工 + smoke-client |
+| AC-8 | 设置页可改：关闭「自动创建」后新会话不建树（不重启）；值写入 profile patch；官方「插件」页也出现自动表单 | 手工 + live-host RPC + 读 patch 断言 |
+| AC-9 | 设置页冲突 / 非法值有明确提示且不破坏当前配置 | 单元测试（revision / validation） |
+| AC-10 | 旧按钮、`create` / `cancel` 端点、pending 逻辑不存在；旧记录仍可显示 / 清理 | 代码 grep + 测试 |
+| AC-11 | 单测、host / client smoke 全绿 | 本地脚本 |
+| AC-12 | 真实 DSH 宿主：路由注册、placement 读写、投影推送、settings get/set、客户端 bundle 分发 | 临时 profile 启动 + curl RPC |
 
 ## 10. 故障排查
 
 | 现象 | 处理 |
 | --- | --- |
-| 启动报 `Cannot find package 'dsh-codex-worktree'` | 重新执行 `dsh plugin --profile desktop add github:wplct/dsh-codex-worktree`（直接安装则是 `node install.mjs`），确认 `<profile>/node_modules/dsh-codex-worktree/lib/index.js` 存在，然后重启 DSH。 |
-| 新会话没有建树 | 依次确认：`enabled: true`；cwd 在 Git 仓库且有提交；仓库根没有 `.dsh-codex-worktree-off`；不是子代理；session id 不匹配 `skipSessionIdPatterns`；该仓库未达 `maxPerRepo`；看日志里的原因码（见第 2 节表）。 |
-| 点「新建 Worktree」失败 | 按钮旁会显示错误码：`not-git-repository`（不是 Git 仓库）、`no-commit`（仓库无提交）、`disabled`（插件关闭，或仓库根存在 `.dsh-codex-worktree-off`）、`limit-reached`（达到 `maxPerRepo`，先清理旧检出）、`root-unreachable`（`root` 不可写或沙箱不允许）。 |
-| `/wt-status` 显示 `not in an automatic worktree` | 该会话没被管理（被跳过、插件关闭、或非 git）。用第 2 节的原因码逐条排除。 |
-| 日志出现 `automatic worktree … failed` | git 报错或超时：检查 `git` 是否在 PATH、仓库是否损坏；需要时调大 `gitTimeoutMs`。会话本身不受影响。 |
-| 期望 detached，却出现 `wt/...` 分支 | `mode` 被改成 `branch` 了：改回 `detached`（profile patch 覆盖行优先级最高）。 |
-| `git status` 里出现一堆池内文件 | 池目录被加进版本控制前就已存在、或缺 `.gitignore`：确认 `poolGitignore: true`，必要时手动在池目录放内容为 `*` 的 `.gitignore`。 |
-| 安装时 `node --check` 失败 | 源包（`lib/**`、`client/**`）本身有语法错误；安装已回滚，profile 未被改动。修好包再装。 |
-| 安装报 `missing source directory: …/client` | 源包缺半边（host/client 未齐）。补齐 `client/` 后再安装。 |
-| 新会话没有建树，原因 `root-outside-sandbox` / `read-only-sandbox` | `root` 落在会话工作区之外，或会话沙箱是 `read-only`：改回默认空 `root`（池在仓库内），或改用 `danger-full-access` / 可写会话。 |
-| 期望创建前 fetch，但没有任何联网动作 | `fetchBeforeCreate` 默认 `false`，要显式开启；fetch 只针对 `origin`（没有该 remote 时跳过并 warn），失败只会 warning，不会阻断。 |
-| 旧检出被自动删除 | `autoPrune: true` 且达到 `maxPerRepo`：只会删除超过最新 `autoPruneKeep` 条、且已过 `pruneGraceMs` 冷却的干净检出。detached 提交在 `refs/dsh-codex-worktree/<name>`，用 `git branch <name> dsh-codex-worktree/<name>` 恢复；不想被自动清理就设 `autoPrune: false` 或调大 `autoPruneKeep`。 |
-| 已达上限却没有自动清理 | 后台清理在每次成功创建后运行，赶不上连续创建时新会话会按 `limit` 跳过：在设置页点「立即清理」，或调大 `maxPerRepo`。超出 `autoPruneKeep` 的条目若全是脏检出或仍在 `pruneGraceMs` 冷却期内，插件也不会强删。 |
-| 卸载后插件仍在加载 | 重启 DSH；再确认 profile patch 无标记块、目录已删除。 |
+| 新会话首屏没有工作位置选择器 | 只有 blank 新会话且工作区是 Git 仓库才显示；已有会话、非 Git 工作区都会隐藏（用 `placement` RPC 的 `isGit` 确认）。 |
+| 明明选了「新建本地工作树」却没建 | 确认该工作区 placement 仍为 `worktree`（按工作区记忆，可能上次被改成 `local`）；看会话日志里 `agent/created` 的跳过原因；确认 `enabled: true`、仓库有提交、未达 `maxPerRepo`、无禁用标记。 |
+| 选了「本地」但以前的会话还在 worktree 里 | placement 只影响**之后**的新会话；已有会话保持原 cwd，可在设置页清理其检出。 |
+| 进度卡显示错误 | 按错误码处理：`not-git-repository` / `no-commit` / `disabled` / `root-unreachable` / `limit-reached`；会话会在原目录继续，不阻塞对话。 |
+| 进度卡一直停在「检出文件」 | git 命令可能卡住/超时：检查 `git` 是否在 PATH、仓库是否健康；必要时调大 `gitTimeoutMs`。 |
+| 设置页保存报「配置已在别处修改」 | revision 冲突：表单已自动刷新，确认后重新保存；两处表单（插件页 / 本页）同源。 |
+| 设置页保存报 `settings-unavailable` | 当前组合没有 settings 服务（headless / 非 profile）：配置降级为只读，请直接改活动 profile 的 `cordis.patch.yml`（`- id: codex-worktree`）后重启。 |
+| 侧边栏托管会话没有图标 | 只有投影 `phase === 'ready'` 才显示；非 live 会话清理后需下次 `agent/created` 才消失；确认客户端与服务端都已重启到 0.3.0。 |
+| chip 显示「未托管」但会话在 worktree 里 | 该会话不是本插件托管（旧版本创建、手动 `git worktree add`、或 placement=local）；旧记录可继续在设置页看到并清理。 |
+| 0.2.x 的「新建 Worktree」按钮不见了 | 0.3.0 已移除；创建改为发送第一条消息后自动触发。 |
+| 升级后旧工作区/旧检出还在 | 0.2.x 旧按钮可能创建过工作区与检出：确认侧边栏多出的 workspace、对应 `.agents/worktrees/wt-*` 与 pending 记录后人工清理（见 §3.2）。 |
+| 启动报 `Cannot find package 'dsh-codex-worktree'` | 重新 `dsh plugin --profile desktop add github:wplct/dsh-codex-worktree`（直接安装则 `node install.mjs`），确认 `<profile>/node_modules/dsh-codex-worktree/lib/index.js` 存在，然后重启。 |
 
 ## 11. 目录结构
 
 ```text
 dsh-codex-worktree/
-├── install.mjs          # 直接安装：复制到 profile + 追加标记块（支持 --dry-run / --profile）
-├── uninstall.mjs        # 直接卸载：删标记块 + 删目录（幂等，支持 --dry-run）
-├── package.json         # 包名 dsh-codex-worktree；exports "." (host) / "./client" (web)；dsh.bundle.patch
-├── cordis.patch.yml     # row id codex-worktree 的 insert 行（不含 config）；配置默认值在 lib/config.js
-├── lib/                 # host 半边：config 默认值/schema、agent/created 钩子、git 封装、池规则、自动清理（prune/快照）、侧车、命令/路由（含 create）
-├── client/              # 浏览器半边：会话头部 chip、设置页（只读配置 + 立即清理 + 按仓库分组的检出列表/已知对话）、新会话「新建 Worktree」按钮、/wt-* 的 GUI 呈现与本地化
-│   └── README.md        # client 半边的实现说明
-├── scripts/             # smoke 测试：smoke-host.mjs（host 挂载/RPC）、smoke-client.mjs（浏览器产物）
+├── install.mjs          # 直接安装：复制到 profile + 追加标记块（--dry-run / --profile）
+├── uninstall.mjs        # 直接卸载：删标记块 + 删目录（幂等，--dry-run）
+├── package.json         # 0.3.0；exports "." (host) / "./client" (web)；engines node >=22.19
+├── cordis.patch.yml     # 纯 insert 行（id: codex-worktree，不含 config）
+├── lib/                 # host 半边：config 默认值/校验、volatile 热配置、agent/created 建树、
+│                        # git 封装、池规则、自动清理（prune/快照）、侧车 v2 + placements、
+│                        # 会话投影、RPC 路由（placement/settings/status/list/clean/prune）、命令
+├── client/client.js     # 浏览器半边：5 个槽位（选择器/进度卡/侧边栏标记/设置页/chip）
+│   └── README.md        # client 半边的槽位、投影、RPC、零轮询说明
+├── scripts/             # smoke-host.mjs / smoke-client.mjs
+├── test/                # node --test 单元/集成测试
 ├── README.zh.md         # 本文（主）
 ├── README.md            # 英文对应版本
 └── LICENSE              # MIT
 ```
 
-通过 `dsh plugin` 安装时，runtime 解析依赖的方式与其他 profile 插件一致；用 `install.mjs` 直接安装到 `<profile>/node_modules/dsh-codex-worktree/` 后同理（不额外安装 node_modules）。
+本地开发与自检：
+
+```sh
+npm test                 # 单元 / 集成测试（node --test）
+npm run smoke            # host + client smoke
+npm run verify           # 以上 + node --check client/client.js
+npm run install:dry      # 直接安装 dry-run
+```

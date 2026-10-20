@@ -87,6 +87,7 @@ export function createFakeCtx(options = {}) {
     },
     agents: {
       roots: () => [...roots],
+      get: (id) => roots.find((agent) => agent.session?.id === id) ?? undefined,
     },
     workingDirectory: {
       get: (session) => session.__cwd ?? session.header.cwd,
@@ -99,9 +100,17 @@ export function createFakeCtx(options = {}) {
   return { ctx, logs, roots }
 }
 
-/** A live-agent stand-in owned by one session. */
+/** A live-agent stand-in owned by one session; `session.events` records appends. */
 export function createAgent(cwd, id = 'session-test-1') {
-  const session = { id, header: { cwd }, append: () => undefined }
+  const session = {
+    id,
+    header: { cwd },
+    events: [],
+    append(type, data) {
+      session.events.push({ type, data })
+      return { type, seq: session.events.length - 1, data }
+    },
+  }
   return {
     id,
     session,
