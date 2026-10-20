@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-worktree",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Codex 风格 Worktree for DeepSeek Harness: every new session in a Git repository automatically gets its own detached checkout and works there, with a one-click \"新建 Worktree\" button and a worktree settings page. No naming required — the branch name is owned by Git at commit time.",
   "license": "MIT",
   "author": "wplct",

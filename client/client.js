@@ -1636,7 +1636,13 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      var workspacePath = workspace && typeof workspace.path === 'string' ? workspace.path : ''
+      // A brand-new Session may render before the Workspace snapshot lists it;
+      // its header cwd is the same directory the Workspace would report.
+      var workspacePath = firstString(
+        workspace && workspace.path,
+        session && session.header && session.header.cwd,
+        session && session.cwd,
+      )
       var visible = !!(session && session.blank === true && workspacePath !== '' && !isWorktreePath(workspacePath))
       if (!visible) return null
 
