@@ -183,6 +183,17 @@ export default z
     connection: { fetch: { register: (route) => (captured.routes.push(route), () => undefined) } },
   }
 
+  // Cordis throws on reading a service the plugin did not inject; the optional
+  // sandbox services must be read defensively, never as `ctx.sandbox` directly.
+  for (const name of ['sandbox', 'sandboxPolicy']) {
+    Object.defineProperty(ctx, name, {
+      configurable: true,
+      get() {
+        throw new Error(`cannot get property "${name}" without inject`)
+      },
+    })
+  }
+
   // ---- 3. Mount ----------------------------------------------------------
   // Keep the sidecar inside the sandbox: the plugin reads DSH_HOME at mount time.
   const dshHome = join(workspace, 'home')

@@ -330,3 +330,29 @@ test('createCheckout respects the per-repository disable marker', async () => {
     (error) => error.code === 'disabled',
   )
 })
+
+test('a Cordis context that throws on uninjected services still creates a worktree', async () => {
+  const repo = await makeRepo()
+  const stateDir = await makeTempDir()
+  const config = resolveConfig({ directory: '.agents/worktrees' })
+  const { ctx, roots } = createFakeCtx()
+  for (const name of ['sandbox', 'sandboxPolicy']) {
+    Object.defineProperty(ctx, name, {
+      configurable: true,
+      get() {
+        throw new Error(`cannot get property "${name}" without inject`)
+      },
+    })
+  }
+  const store = createStateStore(join(stateDir, 'state.json'))
+  const runtime = createRuntime({ ctx, config, store, git: createGit(ctx, config) })
+  const agent = createAgent(repo)
+  roots.push(agent)
+  const result = await runtime.ensureForAgent({ agent, source: 'startup' })
+  assert.equal(result.created, true, JSON.stringify(result))
+
+  // The agentless `create` path (composer button) must survive the same guard.
+  const second = await runtime.createCheckout({ repoPath: repo })
+  assert.equal(second.pending, true)
+  assert.ok(existsSync(second.path))
+})
